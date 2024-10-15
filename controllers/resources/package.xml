@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package>
+  <name>controllers</name>
+  <version>1.0.0</version>
+  <description>
+    absent
+  </description>
+  <author email="wf34@users.noreply.github.com">wf34</author>
+  <maintainer email="wf34@users.noreply.github.com">wf34</maintainer>
+  <license>BSD</license>
+</package>
