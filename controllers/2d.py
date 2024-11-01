@@ -1,33 +1,43 @@
 #!/usr/bin/env python3
 
+import time
+import os
 import typing
+import dataclasses as dc
 
 import numpy as np
 from tap import Tap
+import pydot
 
 from pydrake.all import (
     ApplyLcmBusConfig,
     DrakeLcmParams,
+    Diagram,
     DiagramBuilder,
-    #DiscreteContactApproximation,
+    DiscreteContactApproximation,
+    ApplyMultibodyPlantConfig,
     AddMultibodyPlantSceneGraph,
+    ApplyVisualizationConfig,
     FlattenModelDirectives,
     JacobianWrtVariable,
     ProcessModelDirectives,
     ModelDirective,
     ModelDirectives,
+    ModelInstanceIndex,
     ModelInstanceInfo,
     LeafSystem,
+    MakeMultibodyStateToWsgStateSystem,
     RollPitchYaw,
     Simulator,
+    Meshcat,
     StartMeshcat,
     MultibodyPlant,
     VectorLogSink,
-    ApplyMultibodyPlantConfig,
     RobotDiagramBuilder,
     Parser,
     IiwaDriver,
     SchunkWsgDriver,
+    SchunkWsgPositionController,
     WeldJoint,
     RigidTransform,
     SharedPointerSystem,
@@ -81,6 +91,166 @@ def _FreezeChildren(
         plant.AddJoint(weld)
 
 
+@dc.dataclass
+class JointPidControllerGains:
+    """Defines the Proportional-Integral-Derivative gains for a single joint.
+
+    Args:
+        kp: The proportional gain.
+        ki: The integral gain.
+        kd: The derivative gain.
+    """
+
+    kp: float = 100  # Position gain
+    ki: float = 1  # Integral gain
+    kd: float = 20  # Velocity gain
+
+
+@dc.dataclass
+class InverseDynamicsDriver:
+    """A simulation-only driver that adds the InverseDynamicsController to the
+    station and exports the output ports. Multiple model instances can be driven with a
+    single controller using `instance_name1+instance_name2` as the key; the output ports
+    will be named similarly."""
+
+    # Must have one element for every (named) actuator in the model_instance.
+    gains: typing.Mapping[str, JointPidControllerGains] = dc.field(default_factory=dict)
+
+
+@dc.dataclass
+class JointPdControllerGains:
+    """Defines the Proportional-Derivative gains for a single joint.
+
+    Args:
+        kp: The proportional gain.
+        kd: The derivative gain.
+    """
+
+    kp: float = 0  # Position gain
+    kd: float = 0  # Velocity gain
+
+
+@dc.dataclass
+class JointStiffnessDriver:
+    """A simulation-only driver that sets up MultibodyPlant to act as if it is
+    being controlled with a JointStiffnessController. The MultibodyPlant must
+    be using SAP as the (discrete-time) contact solver.
+
+    Args:
+        gains: A mapping of {actuator_name: JointPdControllerGains} for each
+            actuator that should be controlled.
+        hand_model_name: If set, then the gravity compensation will be turned
+            off for this model instance (e.g. for a hand).
+    """
+
+    # Must have one element for every (named) actuator in the model_instance.
+    gains: typing.Mapping[str, JointPdControllerGains] = dc.field(default_factory=dict)
+
+    hand_model_name: str = ""
+
+
+class TorqueController(LeafSystem):
+    """Wrapper System for Commanding Pure Torques to planar iiwa.
+    @param plant MultibodyPlant of the simulated plant.
+    @param ctrl_fun function object to implement torque control law.
+    @param vx Velocity towards the linear direction.
+    """
+    def __init__(self, plant, ctrl_fun, vx):
+        LeafSystem.__init__(self)
+        self._plant = plant
+        self._plant_context = plant.CreateDefaultContext()
+        self._iiwa = plant.GetModelInstanceByName("iiwa")
+        self._G = plant.GetBodyByName("body").body_frame()
+        self._W = plant.world_frame()
+        self._ctrl_fun = ctrl_fun
+        self._vx = vx
+        self._joint_indices = [
+            plant.GetJointByName(j).position_start()
+            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
+        ]
+
+        self.DeclareVectorInputPort("iiwa_position_measured", 3)
+        self.DeclareVectorInputPort("iiwa_velocity_measured", 3)
+
+        # If we want, we can add this in to do closed-loop force control on z.
+        # self.DeclareVectorInputPort("iiwa_torque_external", 3)
+
+        self.DeclareVectorOutputPort(
+            "iiwa_position_command", 3, self.CalcPositionOutput
+        )
+        self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
+        # Compute foward kinematics so we can log the wsg position for grading.
+        self.DeclareVectorOutputPort("wsg_position", 3, self.CalcWsgPositionOutput)
+
+    def CalcPositionOutput(self, context, output):
+        """Set q_d = q_now. This ensures the iiwa goes into pure torque mode in sim by setting the position control torques in InverseDynamicsController to zero.
+        NOTE(terry-suh): Do not use this method on hardware or deploy this notebook on hardware.
+        We can only simulate pure torque control mode for iiwa on sim.
+        """
+        q_now = self.get_input_port(0).Eval(context)
+        output.SetFromVector(q_now)
+
+    def CalcTorqueOutput(self, context, output):
+        # Hard-coded position and force profiles. Can be connected from Trajectory class.
+        if context.get_time() < 2.0:
+            px_des = 0.65
+        else:
+            px_des = 0.65 + self._vx * (context.get_time() - 2.0)
+
+        fz_des = 10
+
+        # Read inputs
+        q_now = self.get_input_port(0).Eval(context)
+        v_now = self.get_input_port(1).Eval(context)
+        # tau_now = self.get_input_port(2).Eval(context)
+
+        self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
+
+        # 1. Convert joint space quantities to Cartesian quantities.
+        X_now = self._plant.CalcRelativeTransform(self._plant_context, self._W, self._G)
+
+        rpy_now = RollPitchYaw(X_now.rotation()).vector()
+        p_xyz_now = X_now.translation()
+
+        J_G = self._plant.CalcJacobianSpatialVelocity(
+            self._plant_context,
+            JacobianWrtVariable.kQDot,
+            self._G,
+            [0, 0, 0],
+            self._W,
+            self._W,
+        )
+
+        # Only select relevant terms. We end up with J_G of shape (3,3).
+        # Rows correspond to (pitch, x, z).
+        # Columns correspond to (q0, q1, q2).
+        J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
+        v_pxz_now = J_G.dot(v_now)
+
+        p_pxz_now = np.array([rpy_now[1], p_xyz_now[0], p_xyz_now[2]])
+
+        # 2. Apply ctrl_fun
+        F_pxz = self._ctrl_fun(p_pxz_now, v_pxz_now, px_des, fz_des)
+
+        # 3. Convert back to joint coordinates
+        tau_cmd = J_G.T.dot(F_pxz)
+        output.SetFromVector(tau_cmd)
+
+    def CalcWsgPositionOutput(self, context, output):
+        """
+        Compute Forward kinematics. Needed to log the position trajectory for grading.  TODO(russt): Could use MultibodyPlant's body_poses output port for this.
+        """
+        q_now = self.get_input_port(0).Eval(context)
+        self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
+        X_now = self._plant.CalcRelativeTransform(self._plant_context, self._W, self._G)
+
+        rpy_now = RollPitchYaw(X_now.rotation()).vector()
+        p_xyz_now = X_now.translation()
+        p_pxz_now = np.array([rpy_now[1], p_xyz_now[0], p_xyz_now[2]])
+
+        output.SetFromVector(p_pxz_now)
+
+
 def _PopulatePlantOrDiagram(
     plant: MultibodyPlant,
     parser: Parser,
@@ -125,6 +295,7 @@ def _PopulatePlantOrDiagram(
         parser_prefinalize_callback(parser)
 
     plant.Finalize()
+
 
 def MakeMultibodyPlant(
     scenario: Scenario,
@@ -188,54 +359,54 @@ def ConfigureParser(parser: Parser):
     parser.package_map().AddPackageXml(filename=package_xml)
 
 
-# def _ApplyPrefinalizeDriverConfigSim(
-#     driver_config,  # See Scenario.model_drivers for typing
-#     model_instance_name: str,
-#     sim_plant: MultibodyPlant,
-#     directives: typing.List[ModelDirective],
-#     models_from_directives_map: typing.Mapping[str, typing.List[ModelInstanceInfo]],
-#     package_xmls: typing.List[str],
-#     builder: DiagramBuilder,
-# ) -> None:
-#     if isinstance(driver_config, JointStiffnessDriver):
-#         model_instance = sim_plant.GetModelInstanceByName(model_instance_name)
-# 
-#         # Set PD gains.
-#         for name, gains in driver_config.gains.items():
-#             actuator = sim_plant.GetJointActuatorByName(name, model_instance)
-#             actuator.set_controller_gains(PdControllerGains(p=gains.kp, d=gains.kd))
-# 
-#         # Turn off gravity to model (perfect) gravity compensation.
-#         sim_plant.set_gravity_enabled(model_instance, False)
-#         if driver_config.hand_model_name:
-#             sim_plant.set_gravity_enabled(
-#                 sim_plant.GetModelInstanceByName(driver_config.hand_model_name),
-#                 False,
-#             )
-# 
-# 
-# def _ApplyPrefinalizeDriverConfigsSim(
-#     *,
-#     driver_configs,  # See Scenario.model_drivers for typing
-#     sim_plant: MultibodyPlant,
-#     directives: typing.List[ModelDirective],
-#     models_from_directives: typing.Mapping[str, typing.List[ModelInstanceInfo]],
-#     package_xmls: typing.List[str],
-#     builder: DiagramBuilder,
-# ) -> None:
-#     models_from_directives_map = dict(
-#         [(info.model_name, info) for info in models_from_directives]
-#     )
-#     for model_instance_name, driver_config in driver_configs.items():
-#         _ApplyPrefinalizeDriverConfigSim(
-#             driver_config,
-#             model_instance_name,
-#             sim_plant,
-#             directives,
-#             models_from_directives_map,
-#             package_xmls,
-#             builder,
-#         )
+def _ApplyPrefinalizeDriverConfigSim(
+    driver_config,  # See Scenario.model_drivers for typing
+    model_instance_name: str,
+    sim_plant: MultibodyPlant,
+    directives: typing.List[ModelDirective],
+    models_from_directives_map: typing.Mapping[str, typing.List[ModelInstanceInfo]],
+    package_xmls: typing.List[str],
+    builder: DiagramBuilder,
+) -> None:
+    if isinstance(driver_config, JointStiffnessDriver):
+        model_instance = sim_plant.GetModelInstanceByName(model_instance_name)
+
+        # Set PD gains.
+        for name, gains in driver_config.gains.items():
+            actuator = sim_plant.GetJointActuatorByName(name, model_instance)
+            actuator.set_controller_gains(PdControllerGains(p=gains.kp, d=gains.kd))
+
+        # Turn off gravity to model (perfect) gravity compensation.
+        sim_plant.set_gravity_enabled(model_instance, False)
+        if driver_config.hand_model_name:
+            sim_plant.set_gravity_enabled(
+                sim_plant.GetModelInstanceByName(driver_config.hand_model_name),
+                False,
+            )
+
+
+def _ApplyPrefinalizeDriverConfigsSim(
+    *,
+    driver_configs,  # See Scenario.model_drivers for typing
+    sim_plant: MultibodyPlant,
+    directives: typing.List[ModelDirective],
+    models_from_directives: typing.Mapping[str, typing.List[ModelInstanceInfo]],
+    package_xmls: typing.List[str],
+    builder: DiagramBuilder,
+) -> None:
+    models_from_directives_map = dict(
+        [(info.model_name, info) for info in models_from_directives]
+    )
+    for model_instance_name, driver_config in driver_configs.items():
+        _ApplyPrefinalizeDriverConfigSim(
+            driver_config,
+            model_instance_name,
+            sim_plant,
+            directives,
+            models_from_directives_map,
+            package_xmls,
+            builder,
+        )
 
 def _ApplyDriverConfigSim(
     driver_config,  # See Scenario.model_drivers for typing
@@ -475,17 +646,11 @@ class TwoDArgs(Tap):
     target_browser_for_replay: str = 'chromium' #'xdg-open'
 
 
-def simulate_2d(args: TwoDArgs):
-    meshcat = StartMeshcat()
-    meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
-    builder = DiagramBuilder()
-
-    plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=TIME_STEP)
-
+def MakeHardawareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize_callback: typing.Callable[[Parser], None] = None) -> Diagram:
     robot_builder = RobotDiagramBuilder(time_step=TIME_STEP)
+    builder = robot_builder.builder()
     sim_plant = robot_builder.plant()
     scene_graph = robot_builder.scene_graph()
-    scenario = LoadScenario(filename=get_resource_path('planar_manipulation_station.scenario.yaml', arg_provides_ext=True))
     ApplyMultibodyPlantConfig(scenario.plant_config, sim_plant)
 
     parser = Parser(sim_plant)
@@ -496,22 +661,25 @@ def simulate_2d(args: TwoDArgs):
         parser=parser,
     )
 
-    # _ApplyPrefinalizeDriverConfigsSim(
-    #     driver_configs=scenario.model_drivers,
-    #     sim_plant=sim_plant,
-    #     directives=scenario.directives,
-    #     models_from_directives=added_models,
-    #     package_xmls=package_xmls,
-    #     builder=builder,
-    # )
+    if parser_prefinalize_callback:
+        parser_prefinalize_callback(parser)
+
+    _ApplyPrefinalizeDriverConfigsSim(
+        driver_configs=scenario.model_drivers,
+        sim_plant=sim_plant,
+        directives=scenario.directives,
+        models_from_directives=added_models,
+        package_xmls=[],
+        builder=builder,
+    )
 
     sim_plant.Finalize()
 
     # For some Apply* functions in this workflow, we _never_ want LCM.
     scenario.lcm_buses["opt_out"] = DrakeLcmParams(lcm_url="memq://null")
 
-    # Add LCM buses. (The simulator will handle polling the network for new
-    # messages and dispatching them to the receivers, i.e., "pump" the bus.)
+    ## Add LCM buses. (The simulator will handle polling the network for new
+    ## messages and dispatching them to the receivers, i.e., "pump" the bus.)
     lcm_buses = ApplyLcmBusConfig(lcm_buses=scenario.lcm_buses, builder=builder)
 
     _ApplyDriverConfigsSim(
@@ -521,6 +689,124 @@ def simulate_2d(args: TwoDArgs):
         package_xmls=[],
         builder=builder,
     )
+
+    # Add visualization.
+    if meshcat:
+        ApplyVisualizationConfig(
+            scenario.visualization, builder, meshcat=meshcat, lcm_buses=lcm_buses
+        )
+
+    # Export "cheat" ports.
+    builder.ExportInput(
+        sim_plant.get_applied_generalized_force_input_port(),
+        "applied_generalized_force",
+    )
+    builder.ExportInput(
+        sim_plant.get_applied_spatial_force_input_port(),
+        "applied_spatial_force",
+    )
+
+    # Export any actuation (non-empty) input ports that are not already
+    # connected (e.g. by a driver).
+    for i in range(sim_plant.num_model_instances()):
+        port = sim_plant.get_actuation_input_port(ModelInstanceIndex(i))
+        if port.size() > 0 and not builder.IsConnectedOrExported(port):
+            builder.ExportInput(port, port.get_name())
+    # Export all MultibodyPlant output ports.
+    for i in range(sim_plant.num_output_ports()):
+        builder.ExportOutput(
+            sim_plant.get_output_port(i),
+            sim_plant.get_output_port(i).get_name(),
+        )
+    # Export the only SceneGraph output port.
+    builder.ExportOutput(scene_graph.get_query_output_port(), "query_object")
+
+    station_diagram = robot_builder.Build()
+    station_diagram.set_name('station')
+    return station_diagram
+
+
+def compute_ctrl(p_pxz_now, v_pxz_now, x_des, f_des):
+    """Compute control action given current position and velocities, as well as
+    desired x-direction position p_des(t) / desired z-direction force f_des.
+    You may set theta_des yourself, though we recommend regulating it to zero.
+    Input:
+      - p_pxz_now: np.array (dim 3), position of the finger. [thetay, px, pz]
+      - v_pxz_now: np.array (dim 3), velocity of the finger. [wy, vx, vz]
+      - x_des: float, desired position of the finger along the x-direction.
+      - f_des: float, desired force on the book along the z-direction.
+    Output:
+      - u    : np.array (dim 3), spatial torques to send to the manipulator. [tau_y, fx, fz]
+    """
+
+    u = np.zeros(3)
+    return u
+
+
+def Setup(parser):
+    parser.plant().set_discrete_contact_approximation(
+        DiscreteContactApproximation.kLagged
+    )
+
+
+def simulate_2d(args: TwoDArgs):
+    meshcat = StartMeshcat()
+    meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
+
+    builder = DiagramBuilder()
+
+    # plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=TIME_STEP)
+
+    scenario = LoadScenario(filename=get_resource_path('planar_manipulation_station.scenario.yaml', arg_provides_ext=True))
+    station = builder.AddSystem(MakeHardawareStation(scenario, meshcat, parser_prefinalize_callback=Setup))
+
+
+    #visualizer = MeshcatVisualizer.AddToBuilder(robot_builder, scene_graph, meshcat)
+
+    plant = station.GetSubsystemByName("plant")
+    scene_graph = station.GetSubsystemByName("scene_graph")
+    velocity = -0.125
+
+    controller = builder.AddSystem(TorqueController(plant, compute_ctrl, velocity))
+
+    builder.Connect(
+        controller.get_output_port(0), station.GetInputPort("iiwa.position")
+    )
+    builder.Connect(
+        controller.get_output_port(1),
+        station.GetInputPort("iiwa.torque"),
+    )
+
+    # builder.Connect(controller.get_output_port(2), logger.get_input_port(0))
+
+    builder.Connect(
+        station.GetOutputPort("iiwa.position_measured"),
+        controller.get_input_port(0),
+    )
+    builder.Connect(
+        station.GetOutputPort("iiwa.velocity_estimated"),
+        controller.get_input_port(1),
+    )
+
+    diagram = builder.Build()
+
+    pydot.graph_from_dot_data(diagram.GetGraphvizString(max_depth=2))[0].write_png('diagram.png')
+    simulator = Simulator(diagram)
+    station_context = station.GetMyContextFromRoot(simulator.get_mutable_context())
+    station.GetInputPort("wsg.position").FixValue(station_context, [0.02])
+
+    meshcat.StartRecording(set_visualizations_while_recording=False)
+
+    duration = 30.
+    web_url = meshcat.web_url()
+
+    print(f'Meshcat is now available at {web_url}')
+    os.system(f'xdg-open {web_url}')
+
+    simulator.AdvanceTo(duration)
+    meshcat.PublishRecording()
+    time.sleep(30)
+
 
 if '__main__' == __name__:
     simulate_2d(TwoDArgs().parse_args())

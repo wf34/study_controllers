@@ -1,2 +1,4 @@
 typed-argument-parser
 drake
+pydot
+ruff
