@@ -9,14 +9,18 @@ import numpy as np
 from tap import Tap
 import pydot
 
+SHELF_LENGTH = .6
+SHELF_THICKNESS = .075
+
 from pydrake.all import (
+    Sphere,
+    Rgba,
     ApplyLcmBusConfig,
     DrakeLcmParams,
     Diagram,
     DiagramBuilder,
     DiscreteContactApproximation,
     ApplyMultibodyPlantConfig,
-    AddMultibodyPlantSceneGraph,
     ApplyVisualizationConfig,
     FlattenModelDirectives,
     ProcessModelDirectives,
@@ -655,8 +659,6 @@ def simulate_2d(args: TwoDArgs):
 
     builder = DiagramBuilder()
 
-    # plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=TIME_STEP)
-
     scenario = LoadScenario(filename=get_resource_path('planar_manipulation_station.scenario.yaml', arg_provides_ext=True))
     station = builder.AddSystem(MakeHardawareStation(scenario, meshcat, parser_prefinalize_callback=Setup))
 
@@ -691,9 +693,29 @@ def simulate_2d(args: TwoDArgs):
     diagram = builder.Build()
 
     pydot.graph_from_dot_data(diagram.GetGraphvizString(max_depth=2))[0].write_png('diagram.png')
+
     simulator = Simulator(diagram)
     station_context = station.GetMyContextFromRoot(simulator.get_mutable_context())
     station.GetInputPort("wsg.position").FixValue(station_context, [0.02])
+
+    plant_context = plant.GetMyContextFromRoot(simulator.get_mutable_context())
+    Xs_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('shelf_body'))
+
+    dominant_axis = np.array([1., 0., 0.])
+    minor_axis = np.array([0., 0., 1.])
+    dominant_axis_W = Xs_WG.rotation().multiply(dominant_axis)
+    minor_axis_W = Xs_WG.rotation().multiply(minor_axis)
+    dominant_axis_W *= SHELF_LENGTH / 2.
+    minor_axis_W *= SHELF_THICKNESS / 2
+
+    X_Wpstart = RigidTransform(Xs_WG.translation() - dominant_axis_W + minor_axis_W)
+    X_Wpend = RigidTransform(Xs_WG.translation() + dominant_axis_W + minor_axis_W)
+
+    meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
+    meshcat.SetTransform("start", X_Wpstart)
+
+    meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
+    meshcat.SetTransform("end", X_Wpend)
 
     meshcat.StartRecording(set_visualizations_while_recording=False)
 

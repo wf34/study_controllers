@@ -19,7 +19,7 @@ directives:
     parent: world
     child: shelf::shelf_body
     X_PC:
-        translation: [0.65, 0, 0.4]
+        translation: [0.7, 0, 0.45]
         rotation: !Rpy { deg: [0, -45, 0]}
 - add_weld:
     parent: iiwa::iiwa_link_7
