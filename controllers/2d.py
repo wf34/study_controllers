@@ -9,9 +9,6 @@ import numpy as np
 from tap import Tap
 import pydot
 
-SHELF_LENGTH = .6
-SHELF_THICKNESS = .075
-
 from pydrake.all import (
     Sphere,
     Rgba,
@@ -48,10 +45,13 @@ from pydrake.all import (
 )
 
 from directives_tree import DirectivesTree
-from resource_loader import get_resource, get_resource_path, LoadScenario, Scenario
+from resource_loader import get_resource_path, LoadScenario, Scenario
 from catalog import TorqueController
 
 TIME_STEP=0.001  # faster
+INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., np.pi / 2.])
+SHELF_LENGTH = .6
+SHELF_THICKNESS = .075
 
 def _FreezeChildren(
     plant: MultibodyPlant,
@@ -643,7 +643,7 @@ def compute_ctrl(p_pxz_now, v_pxz_now, x_des, f_des):
       - u    : np.array (dim 3), spatial torques to send to the manipulator. [tau_y, fx, fz]
     """
 
-    u = np.zeros(3)
+    u = np.zeros(3) + np.array([.05, .05,.05])
     return u
 
 
@@ -685,6 +685,7 @@ def simulate_2d(args: TwoDArgs):
         station.GetOutputPort("iiwa.position_measured"),
         controller.get_input_port(0),
     )
+
     builder.Connect(
         station.GetOutputPort("iiwa.velocity_estimated"),
         controller.get_input_port(1),
@@ -699,6 +700,11 @@ def simulate_2d(args: TwoDArgs):
     station.GetInputPort("wsg.position").FixValue(station_context, [0.02])
 
     plant_context = plant.GetMyContextFromRoot(simulator.get_mutable_context())
+    plant.SetPositions(
+        plant_context,
+        plant.GetModelInstanceByName("iiwa"),
+        INITIAL_IIWA_COORDS,
+    )
     Xs_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('shelf_body'))
 
     dominant_axis = np.array([1., 0., 0.])
