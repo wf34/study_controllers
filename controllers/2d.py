@@ -25,6 +25,7 @@ from pydrake.all import (
     ModelDirectives,
     ModelInstanceIndex,
     ModelInstanceInfo,
+    MeshcatVisualizer,
     LeafSystem,
     MakeMultibodyStateToWsgStateSystem,
     Simulator,
@@ -47,11 +48,36 @@ from pydrake.all import (
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario
 from catalog import TorqueController
+from opt_trajectory import optimize_target_trajectory
+from state_monitor import StateMonitor
 
 TIME_STEP=0.001  # faster
 INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., np.pi / 2.])
 SHELF_LENGTH = .6
 SHELF_THICKNESS = .075
+
+def minimalist_traj_vis(traj):
+    step = 1. / 33
+    for ts in np.arange(0, traj.end_time(), step):
+        x = traj.value(ts)
+        print(' '.join(list(map(lambda y: f'{y:.2f}', [ts] + x.ravel().tolist()))))
+
+
+def rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat):
+    plant_context = plant.GetMyContextFromRoot(global_context)
+    visualizer_context = visualizer.GetMyContextFromRoot(global_context)
+    visualizer.StartRecording(False)
+    step = 1. / 33
+    for ts in np.arange(0, trajectory.end_time(), step):
+        global_context.SetTime(ts)
+        x = trajectory.value(ts)
+        q_ = np.zeros((plant.num_positions(),1))
+        q_[:3, :] = x
+        plant.SetPositions(plant_context, q_)
+        visualizer.ForcedPublish(visualizer_context)
+    visualizer.StopRecording()
+    visualizer.PublishRecording()
+
 
 def _FreezeChildren(
     plant: MultibodyPlant,
@@ -548,6 +574,9 @@ def _ApplyDriverConfigsSim(
 
 class TwoDArgs(Tap):
     target_browser_for_replay: str = 'xdg-open'
+    diagram_destination: str = 'diagram.png'
+    log_destination: str = '2d-log.json'
+    use_traj_vis: bool = False
 
 
 def MakeHardawareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize_callback: typing.Callable[[Parser], None] = None) -> Diagram:
@@ -662,11 +691,13 @@ def simulate_2d(args: TwoDArgs):
     scenario = LoadScenario(filename=get_resource_path('planar_manipulation_station.scenario.yaml', arg_provides_ext=True))
     station = builder.AddSystem(MakeHardawareStation(scenario, meshcat, parser_prefinalize_callback=Setup))
 
-
-    #visualizer = MeshcatVisualizer.AddToBuilder(robot_builder, scene_graph, meshcat)
-
     plant = station.GetSubsystemByName("plant")
     scene_graph = station.GetSubsystemByName("scene_graph")
+
+    visualizer = None
+    if args.use_traj_vis:
+        visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
+
     velocity = -0.125
 
     controller = builder.AddSystem(TorqueController(plant, compute_ctrl, velocity))
@@ -692,19 +723,24 @@ def simulate_2d(args: TwoDArgs):
     )
 
     diagram = builder.Build()
+    pydot.graph_from_dot_data(diagram.GetGraphvizString(max_depth=2))[0].write_png(args.diagram_destination)
 
-    pydot.graph_from_dot_data(diagram.GetGraphvizString(max_depth=2))[0].write_png('diagram.png')
+    if not args.use_traj_vis:
+        simulator = Simulator(diagram)
+        global_context = simulator.get_mutable_context()
+    else:
+        global_context = diagram.CreateDefaultContext()
 
-    simulator = Simulator(diagram)
-    station_context = station.GetMyContextFromRoot(simulator.get_mutable_context())
+    station_context = station.GetMyContextFromRoot(global_context)
     station.GetInputPort("wsg.position").FixValue(station_context, [0.02])
 
-    plant_context = plant.GetMyContextFromRoot(simulator.get_mutable_context())
+    plant_context = plant.GetMyContextFromRoot(global_context)
     plant.SetPositions(
         plant_context,
         plant.GetModelInstanceByName("iiwa"),
         INITIAL_IIWA_COORDS,
     )
+    Xee_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
     Xs_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('shelf_body'))
 
     dominant_axis = np.array([1., 0., 0.])
@@ -717,22 +753,28 @@ def simulate_2d(args: TwoDArgs):
     X_Wpstart = RigidTransform(Xs_WG.translation() - dominant_axis_W + minor_axis_W)
     X_Wpend = RigidTransform(Xs_WG.translation() + dominant_axis_W + minor_axis_W)
 
+    # state_monitor = StateMonitor(args.log_destination, plant)
+    # simulator.set_monitor(state_monitor.callback)
+
+    trajectory = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
+    # minimalist_traj_vis(trajectory)
+
     meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
     meshcat.SetTransform("start", X_Wpstart)
 
     meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
     meshcat.SetTransform("end", X_Wpend)
 
-    meshcat.StartRecording(set_visualizations_while_recording=False)
+    if args.use_traj_vis:
+        rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)
+    else:
+        meshcat.StartRecording(set_visualizations_while_recording=False)
+        simulator.AdvanceTo(trajectory.end_time())
+        meshcat.PublishRecording()
 
-    duration = 30.
     web_url = meshcat.web_url()
-
     print(f'Meshcat is now available at {web_url}')
     os.system(f'{args.target_browser_for_replay} {web_url}')
-
-    simulator.AdvanceTo(duration)
-    meshcat.PublishRecording()
     time.sleep(30)
 
 
