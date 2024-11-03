@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 
 diagram*.png
+2d-log.json
