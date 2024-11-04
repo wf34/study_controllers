@@ -81,23 +81,31 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
             prog.SetInitialGuess(q_variables, q_keyframes[-1])
             
         prog.AddCost(np.square(np.dot(q_variables, q_nominal)))
-        offset_upper = np.array([6e-2, 6e-2, 6e-2])
-        offset_lower = -offset_upper
+
+        offset = np.array([1e-2, 1e-2, 1e-2])
+
+        if kid == 2:
+            offset = np.array([0.025, 0.02, 0.025])
+
+        offset_upper = keyframe.translation() + offset
+        offset_lower = keyframe.translation() - offset
+
+        pos = np.zeros(3,) if kid in (0, len(keyframes) - 1) else [0., 0.11, 0.]
 
         ik.AddPositionConstraint(
-            frameA=plant.GetFrameByName("body"),
-            frameB=plant.world_frame(),
-            p_BQ=keyframe.translation(),
+            frameA=plant.world_frame(),
+            frameB=plant.GetFrameByName("body"),
+            p_BQ=pos,
             p_AQ_lower=offset_lower,
             p_AQ_upper=offset_upper)
 
-        if kid not in (0, len(keyframes)-1):
+        if kid not in (0, len(keyframes) - 1):
             ik.AddOrientationConstraint(
                     frameAbar=plant.GetFrameByName("body"),
-                    R_AbarA=RotationMatrix(RollPitchYaw(0., np.pi / 4, 0.)),
+                    R_AbarA=RotationMatrix(),
                     frameBbar=plant.world_frame(),
-                    R_BbarB=RotationMatrix(),
-                    theta_bound=np.pi / 2
+                    R_BbarB=RotationMatrix(RollPitchYaw(-np.pi /2., -np.pi / 4, 0.)),
+                    theta_bound=np.radians(5.)
                 )
 
         result = Solve(prog)
@@ -114,5 +122,6 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         print(valid_timestamps, valid_timestamps.shape)
         print(q_keyframes.shape)
         print(q_keyframes[:, :3])
-        q_trajectory = PiecewisePolynomial.CubicShapePreserving(valid_timestamps, q_keyframes[:, :3].T)
+        #q_trajectory = PiecewisePolynomial.CubicShapePreserving(valid_timestamps, q_keyframes[:, :3].T)
+        q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
         return q_trajectory

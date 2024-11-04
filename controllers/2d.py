@@ -10,6 +10,7 @@ from tap import Tap
 import pydot
 
 from pydrake.all import (
+    RollPitchYaw,
     Sphere,
     Rgba,
     ApplyLcmBusConfig,
@@ -52,8 +53,8 @@ from opt_trajectory import optimize_target_trajectory
 from state_monitor import StateMonitor
 
 TIME_STEP=0.001  # faster
-INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., np.pi / 2.])
-SHELF_LENGTH = .6
+INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., -np.pi / 2.])
+SHELF_LENGTH = .5
 SHELF_THICKNESS = .075
 
 def minimalist_traj_vis(traj):
@@ -74,6 +75,8 @@ def rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat):
         q_ = np.zeros((plant.num_positions(),1))
         q_[:3, :] = x
         plant.SetPositions(plant_context, q_)
+        Xeecurrent_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
+        #print(RollPitchYaw(Xeecurrent_WG.rotation()))
         visualizer.ForcedPublish(visualizer_context)
     visualizer.StopRecording()
     visualizer.PublishRecording()
@@ -764,6 +767,9 @@ def simulate_2d(args: TwoDArgs):
 
     meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
     meshcat.SetTransform("end", X_Wpend)
+
+    if trajectory is None:
+        return
 
     if args.use_traj_vis:
         rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)
