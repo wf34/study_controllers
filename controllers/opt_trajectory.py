@@ -99,6 +99,6 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
 
     if len(q_keyframes) == len(keyframes):
         q_keyframes = np.array(q_keyframes)
-        valid_timestamps = np.arange(0, len(keyframes), step=1.) * 5.
+        valid_timestamps = np.arange(0, len(keyframes), step=1.) * 2.
         q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
         return q_trajectory

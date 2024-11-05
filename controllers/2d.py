@@ -350,6 +350,7 @@ def _ApplyDriverConfigSim(
     builder: DiagramBuilder,
 ) -> None:
     if isinstance(driver_config, IiwaDriver):
+        print('we adding IiwaDriver')
         model_instance = sim_plant.GetModelInstanceByName(model_instance_name)
         num_iiwa_positions = sim_plant.num_positions(model_instance)
 
@@ -684,7 +685,7 @@ def simulate_2d(args: TwoDArgs):
     if args.use_traj_vis:
         visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
 
-    controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 5., 1.))
+    controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
 
     #builder.Connect(
@@ -692,23 +693,18 @@ def simulate_2d(args: TwoDArgs):
     #)
     builder.Connect(
         controller.GetOutputPort('iiwa_torque_cmd'),
-        station.GetInputPort("iiwa.torque"),
+        station.GetInputPort("iiwa_actuation"),
     )
 
     # builder.Connect(controller.get_output_port(2), logger.get_input_port(0))
 
     builder.Connect(
-        station.GetOutputPort("iiwa.position_measured"),
-        controller.GetInputPort("iiwa_position_measured"),
-    )
-
-    builder.Connect(
-        station.GetOutputPort("iiwa.velocity_estimated"),
-        controller.GetInputPort('iiwa_velocity_measured'),
+        station.GetOutputPort("iiwa_state"),
+        controller.GetInputPort("iiwa_state_measured"),
     )
 
     diagram = builder.Build()
-    pydot.graph_from_dot_data(diagram.GetGraphvizString(max_depth=2))[0].write_png(args.diagram_destination)
+    pydot.graph_from_dot_data(diagram.GetGraphvizString(max_depth=4))[0].write_png(args.diagram_destination)
 
     if not args.use_traj_vis:
         simulator = Simulator(diagram)
@@ -717,7 +713,7 @@ def simulate_2d(args: TwoDArgs):
         global_context = diagram.CreateDefaultContext()
 
     station_context = station.GetMyContextFromRoot(global_context)
-    station.GetInputPort("wsg.position").FixValue(station_context, [0.02])
+    station.GetInputPort("wsg.position").FixValue(station_context, [0.0])
 
     plant_context = plant.GetMyContextFromRoot(global_context)
     plant.SetPositions(

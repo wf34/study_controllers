@@ -130,12 +130,11 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         self.trajectory = None
         self.qdot_trajectory = None
 
-        self.DeclareVectorInputPort("iiwa_position_measured", 3)
-        self.DeclareVectorInputPort("iiwa_velocity_measured", 3)
+        self.DeclareVectorInputPort("iiwa_state_measured", 6)
 
-        self.DeclareVectorOutputPort(
-            "iiwa_position_command", 3, self.CalcPositionOutput
-        )
+        #self.DeclareVectorOutputPort(
+        #    "iiwa_position_command", 3, self.CalcPositionOutput
+        #)
         self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
 
 
@@ -158,10 +157,12 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         q_desired = self.trajectory.value(target_time).T.ravel()
         qdot_desired = self.qdot_trajectory.value(target_time).T.ravel()
 
-        q_now = self.GetInputPort("iiwa_position_measured").Eval(context)
-        v_now = self.GetInputPort("iiwa_velocity_measured").Eval(context)
+        state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
+        q_now = state_now[:3]
+        qdot_now = state_now[3:]
+
         self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
-        self._plant.SetVelocities(self._plant_context, self._iiwa, v_now)
+        self._plant.SetVelocities(self._plant_context, self._iiwa, qdot_now)
         bias = self._plant.CalcBiasTerm(self._plant_context)
 
         forces = MultibodyForces(plant=self._plant)
@@ -172,8 +173,7 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         tau -= bias
         tau = tau[:3]
         e = q_desired - q_now
-        e_dot = qdot_desired - v_now
-        print(e, e_dot)
+        e_dot = qdot_desired - qdot_now
 
         tau += e * self.kp_vec
         tau += e_dot * self.kd_vec
