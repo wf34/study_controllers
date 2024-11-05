@@ -6,7 +6,8 @@ from pydrake.all import (
     LeafSystem,
     RollPitchYaw,
     JacobianWrtVariable,
-    JointStiffnessController
+    JointStiffnessController,
+    MultibodyForces,
 )
 
 class TorqueController(LeafSystem):
@@ -112,18 +113,22 @@ class TorqueController(LeafSystem):
 
 
 class TrajFollowingJointStiffnessController(LeafSystem):
-    def __init__(self, plant):
+    def __init__(self, plant, kp, kd):
         LeafSystem.__init__(self)
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
         self._iiwa = plant.GetModelInstanceByName("iiwa")
         self._G = plant.GetBodyByName("body").body_frame()
 
+        self.kp_vec = np.zeros(3,) + kp
+        self.kd_vec = np.zeros(3,) + kd
+
         #self.ctrl = JointStiffnessController()
 
         self.DeclareAbstractInputPort(
             "trajectory", AbstractValue.Make(PiecewisePolynomial()))
         self.trajectory = None
+        self.qdot_trajectory = None
 
         self.DeclareVectorInputPort("iiwa_position_measured", 3)
         self.DeclareVectorInputPort("iiwa_velocity_measured", 3)
@@ -146,7 +151,31 @@ class TrajFollowingJointStiffnessController(LeafSystem):
     def CalcTorqueOutput(self, context, output):
         if self.trajectory is None:
             self.trajectory = self.GetInputPort('trajectory').Eval(context)
+            self.qdot_trajectory = self.trajectory.MakeDerivative()
 
-        tau_cmd = np.zeros(3,)
-        tau_cmd += .07
-        output.SetFromVector(tau_cmd)
+        target_time = context.get_time()
+
+        q_desired = self.trajectory.value(target_time).T.ravel()
+        qdot_desired = self.qdot_trajectory.value(target_time).T.ravel()
+
+        q_now = self.GetInputPort("iiwa_position_measured").Eval(context)
+        v_now = self.GetInputPort("iiwa_velocity_measured").Eval(context)
+        self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
+        self._plant.SetVelocities(self._plant_context, self._iiwa, v_now)
+        bias = self._plant.CalcBiasTerm(self._plant_context)
+
+        forces = MultibodyForces(plant=self._plant)
+        self._plant.CalcForceElementsContribution(self._plant_context, forces)
+        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(5,), forces)
+        #print('CalcTorqueOutput', self._plant.num_positions(), bias)
+
+        tau -= bias
+        tau = tau[:3]
+        e = q_desired - q_now
+        e_dot = qdot_desired - v_now
+        print(e, e_dot)
+
+        tau += e * self.kp_vec
+        tau += e_dot * self.kd_vec
+
+        output.SetFromVector(tau)

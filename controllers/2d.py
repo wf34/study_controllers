@@ -48,7 +48,7 @@ from pydrake.all import (
 
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario
-from catalog import TorqueController, TrajFollowingJointStiffnessController
+from catalog import TrajFollowingJointStiffnessController
 from opt_trajectory import optimize_target_trajectory
 from state_monitor import StateMonitor
 
@@ -684,14 +684,14 @@ def simulate_2d(args: TwoDArgs):
     if args.use_traj_vis:
         visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
 
-    controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant))
+    controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 5., 1.))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
 
+    #builder.Connect(
+    #    controller.GetOutputPort('iiwa_position_command'), station.GetInputPort("iiwa.position")
+    #)
     builder.Connect(
-        controller.get_output_port(0), station.GetInputPort("iiwa.position")
-    )
-    builder.Connect(
-        controller.get_output_port(1),
+        controller.GetOutputPort('iiwa_torque_cmd'),
         station.GetInputPort("iiwa.torque"),
     )
 
