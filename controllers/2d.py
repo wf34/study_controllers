@@ -48,7 +48,7 @@ from pydrake.all import (
 
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario
-from catalog import TorqueController
+from catalog import TorqueController, TrajFollowingJointStiffnessController
 from opt_trajectory import optimize_target_trajectory
 from state_monitor import StateMonitor
 
@@ -662,23 +662,6 @@ def MakeHardawareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinaliz
     return station_diagram
 
 
-def compute_ctrl(p_pxz_now, v_pxz_now, x_des, f_des):
-    """Compute control action given current position and velocities, as well as
-    desired x-direction position p_des(t) / desired z-direction force f_des.
-    You may set theta_des yourself, though we recommend regulating it to zero.
-    Input:
-      - p_pxz_now: np.array (dim 3), position of the finger. [theta_y, px, pz]
-      - v_pxz_now: np.array (dim 3), velocity of the finger. [wy, vx, vz]
-      - x_des: float, desired position of the finger along the x-direction.
-      - f_des: float, desired force on the book along the z-direction.
-    Output:
-      - u    : np.array (dim 3), spatial torques to send to the manipulator. [tau_y, fx, fz]
-    """
-
-    u = np.zeros(3) + np.array([.05, .05,.05])
-    return u
-
-
 def Setup(parser):
     parser.plant().set_discrete_contact_approximation(
         DiscreteContactApproximation.kLagged
@@ -701,9 +684,8 @@ def simulate_2d(args: TwoDArgs):
     if args.use_traj_vis:
         visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
 
-    velocity = -0.125
-
-    controller = builder.AddSystem(TorqueController(plant, compute_ctrl, velocity))
+    controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant))
+    builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
 
     builder.Connect(
         controller.get_output_port(0), station.GetInputPort("iiwa.position")
@@ -717,12 +699,12 @@ def simulate_2d(args: TwoDArgs):
 
     builder.Connect(
         station.GetOutputPort("iiwa.position_measured"),
-        controller.get_input_port(0),
+        controller.GetInputPort("iiwa_position_measured"),
     )
 
     builder.Connect(
         station.GetOutputPort("iiwa.velocity_estimated"),
-        controller.get_input_port(1),
+        controller.GetInputPort('iiwa_velocity_measured'),
     )
 
     diagram = builder.Build()
@@ -743,6 +725,9 @@ def simulate_2d(args: TwoDArgs):
         plant.GetModelInstanceByName("iiwa"),
         INITIAL_IIWA_COORDS,
     )
+    q_start_iiwa = plant.GetPositions(plant_context, plant.GetModelInstanceByName("iiwa"))
+    print('q_start_iiwa', q_start_iiwa)
+
     Xee_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
     Xs_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('shelf_body'))
 
@@ -760,6 +745,10 @@ def simulate_2d(args: TwoDArgs):
     # simulator.set_monitor(state_monitor.callback)
 
     trajectory = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
+    if trajectory is None:
+        return
+
+    diagram.GetInputPort('trajectory').FixValue(global_context, trajectory)
     # minimalist_traj_vis(trajectory)
 
     meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
@@ -768,12 +757,13 @@ def simulate_2d(args: TwoDArgs):
     meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
     meshcat.SetTransform("end", X_Wpend)
 
-    if trajectory is None:
-        return
 
     if args.use_traj_vis:
         rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)
     else:
+        q_ = np.zeros((plant.num_positions(),1))
+        q_[:3, :] = trajectory.value(0)
+        plant.SetPositions(plant_context, q_)
         meshcat.StartRecording(set_visualizations_while_recording=False)
         simulator.AdvanceTo(trajectory.end_time())
         meshcat.PublishRecording()

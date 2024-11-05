@@ -1,9 +1,12 @@
 import numpy as np
 
 from pydrake.all import (
+    AbstractValue,
+    PiecewisePolynomial,
     LeafSystem,
     RollPitchYaw,
     JacobianWrtVariable,
+    JointStiffnessController
 )
 
 class TorqueController(LeafSystem):
@@ -108,3 +111,42 @@ class TorqueController(LeafSystem):
         output.SetFromVector(p_pxz_now)
 
 
+class TrajFollowingJointStiffnessController(LeafSystem):
+    def __init__(self, plant):
+        LeafSystem.__init__(self)
+        self._plant = plant
+        self._plant_context = plant.CreateDefaultContext()
+        self._iiwa = plant.GetModelInstanceByName("iiwa")
+        self._G = plant.GetBodyByName("body").body_frame()
+
+        #self.ctrl = JointStiffnessController()
+
+        self.DeclareAbstractInputPort(
+            "trajectory", AbstractValue.Make(PiecewisePolynomial()))
+        self.trajectory = None
+
+        self.DeclareVectorInputPort("iiwa_position_measured", 3)
+        self.DeclareVectorInputPort("iiwa_velocity_measured", 3)
+
+        self.DeclareVectorOutputPort(
+            "iiwa_position_command", 3, self.CalcPositionOutput
+        )
+        self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
+
+
+    def CalcPositionOutput(self, context, output):
+        """Set q_d = q_now. This ensures the iiwa goes into pure torque mode in sim by setting the position control torques in InverseDynamicsController to zero.
+        NOTE(terry-suh): Do not use this method on hardware or deploy this notebook on hardware.
+        We can only simulate pure torque control mode for iiwa on sim.
+        """
+        q_now = self.GetInputPort("iiwa_position_measured").Eval(context)
+        output.SetFromVector(q_now)
+
+
+    def CalcTorqueOutput(self, context, output):
+        if self.trajectory is None:
+            self.trajectory = self.GetInputPort('trajectory').Eval(context)
+
+        tau_cmd = np.zeros(3,)
+        tau_cmd += .07
+        output.SetFromVector(tau_cmd)

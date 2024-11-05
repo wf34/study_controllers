@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -23,33 +23,7 @@ def get_current_positions(plant, plant_context):
     return q_
 
 
-def AddOrientationConstraint(plant, ik, target_frame, R_TG, bounds):
-    """Add orientation constraint to the ik problem. Implements an inequality 
-    constraint where the axis-angle difference between f_R(q) and R_WG must be
-    within bounds. Can be translated to:
-    ik.prog().AddBoundingBoxConstraint(angle_diff(f_R(q), R_WG), -bounds, bounds)
-    """
-    ik.AddOrientationConstraint(
-        frameAbar=plant.GetFrameByName("body"), R_AbarA=R_TG, 
-        frameBbar=target_frame, R_BbarB=RotationMatrix(),
-        theta_bound=bounds
-    )
-
-
-def AddPositionConstraint(plant, ik, target_frame, p_BQ, p_NG_lower, p_NG_upper):
-    """Add position constraint to the ik problem. Implements an inequality
-    constraint where f_p(q) must lie between p_WG_lower and p_WG_upper. Can be
-    translated to 
-    ik.prog().AddBoundingBoxConstraint(f_p(q), p_WG_lower, p_WG_upper)
-    """
-    ik.AddPositionConstraint(
-        frameA=plant.GetFrameByName("body"),
-        frameB=target_frame,
-        p_BQ=p_BQ,
-        p_AQ_lower=p_NG_lower, p_AQ_upper=p_NG_upper)
-
-
-def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_context) -> None:
+def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_context) -> Optional[PiecewisePolynomial]:
     '''
     desc
 
@@ -58,6 +32,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
     '''
     iiwa_model_instance = plant.GetModelInstanceByName('iiwa')
     q_nominal = get_current_positions(plant, plant_context)
+    print('q_nominal', q_nominal)
 
     num_q = plant.num_positions()
     num_iiwa_only = plant.num_positions(iiwa_model_instance)
@@ -67,6 +42,12 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
     print('num_model_instances:', plant.num_model_instances())
     print('num_joints:', plant.num_joints())
     print(num_q)
+
+    joint_indices = [
+            plant.GetJointByName(j).position_start()
+            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
+        ]
+    print('joint_indices:', joint_indices)
 
     q_keyframes = []
     for kid, keyframe in enumerate(keyframes):
@@ -119,9 +100,5 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
     if len(q_keyframes) == len(keyframes):
         q_keyframes = np.array(q_keyframes)
         valid_timestamps = np.arange(0, len(keyframes), step=1.) * 2.
-        print(valid_timestamps, valid_timestamps.shape)
-        print(q_keyframes.shape)
-        print(q_keyframes[:, :3])
-        #q_trajectory = PiecewisePolynomial.CubicShapePreserving(valid_timestamps, q_keyframes[:, :3].T)
         q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
         return q_trajectory
