@@ -583,7 +583,7 @@ class TwoDArgs(Tap):
     use_traj_vis: bool = False
 
 
-def MakeHardawareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize_callback: typing.Callable[[Parser], None] = None) -> Diagram:
+def MakeHardwareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize_callback: typing.Callable[[Parser], None] = None) -> Diagram:
     robot_builder = RobotDiagramBuilder(time_step=TIME_STEP)
     builder = robot_builder.builder()
     sim_plant = robot_builder.plant()
@@ -676,7 +676,7 @@ def simulate_2d(args: TwoDArgs):
     builder = DiagramBuilder()
 
     scenario = LoadScenario(filename=get_resource_path('planar_manipulation_station.scenario.yaml', arg_provides_ext=True))
-    station = builder.AddSystem(MakeHardawareStation(scenario, meshcat, parser_prefinalize_callback=Setup))
+    station = builder.AddSystem(MakeHardwareStation(scenario, meshcat, parser_prefinalize_callback=Setup))
 
     plant = station.GetSubsystemByName("plant")
     scene_graph = station.GetSubsystemByName("scene_graph")
@@ -737,8 +737,8 @@ def simulate_2d(args: TwoDArgs):
     X_Wpstart = RigidTransform(Xs_WG.translation() - dominant_axis_W + minor_axis_W)
     X_Wpend = RigidTransform(Xs_WG.translation() + dominant_axis_W + minor_axis_W)
 
-    # state_monitor = StateMonitor(args.log_destination, plant)
-    # simulator.set_monitor(state_monitor.callback)
+    state_monitor = StateMonitor(args.log_destination, plant, diagram)
+    simulator.set_monitor(state_monitor.callback)
 
     trajectory = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
     if trajectory is None:
@@ -760,6 +760,7 @@ def simulate_2d(args: TwoDArgs):
         q_ = np.zeros((plant.num_positions(),1))
         q_[:3, :] = trajectory.value(0)
         plant.SetPositions(plant_context, q_)
+        simulator.Initialize()
         meshcat.StartRecording(set_visualizations_while_recording=False)
         simulator.AdvanceTo(trajectory.end_time())
         meshcat.PublishRecording()
