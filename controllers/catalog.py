@@ -115,6 +115,13 @@ class TorqueController(LeafSystem):
         output.SetFromVector(p_pxz_now)
 
 
+def get_rot2d_from_transform(X: RigidTransform) -> np.array:
+    pitch = RollPitchYaw(X.rotation()).pitch_angle()
+    sin_pitch = np.sin(pitch)
+    cos_pitch = np.cos(pitch)
+    return np.array([cos_pitch, -sin_pitch, sin_pitch, cos_pitch]).reshape((2, 2))
+
+
 class ForceSensor(LeafSystem):
     def __init__(self, plant):
         LeafSystem.__init__(self)
@@ -172,13 +179,23 @@ class ForceSensor(LeafSystem):
         )
         J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
         J_questionmark = np.linalg.pinv(J_G.T)
+
+        #Jq_p_AoBi_E = self._plant.CalcJacobianPositionVector(
+        #    context=self._plant_context,
+        #    frame_B=self._G,
+        #    p_BoBi_B=np.zeros(3),
+        #    frame_A=self._W,
+        #    frame_E=self._W
+        #)
+        #Jq_p_AoBi_E = Jq_p_AoBi_E[np.ix_([0, 2], self._joint_indices)]
+        #J_questionmark_questionmark = np.linalg.pinv(Jq_p_AoBi_E.T)
+
+        #print(J_G, '\n', J_questionmark, '\n---\nNew Jac:\n')
+        #print(Jq_p_AoBi_E, '\n', J_questionmark_questionmark, '\n===\n')
         f = J_questionmark @ torques
 
         # Rows correspond to (pitch, x, z).
-        pitch = RollPitchYaw(self.X_Wshelf.rotation()).pitch_angle()
-        sin_pitch = np.sin(pitch)
-        cos_pitch = np.cos(pitch)
-        R_Wshelf = np.array([cos_pitch, -sin_pitch, sin_pitch, cos_pitch]).reshape((2, 2))
+        R_Wshelf = get_rot2d_from_transform(self.X_Wshelf)
         f_shelf = R_Wshelf.T @ f[1:]
 
         tf = np.zeros((3),)
@@ -192,8 +209,15 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         LeafSystem.__init__(self)
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
+
+        self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
         self._iiwa = plant.GetModelInstanceByName("iiwa")
         self._G = plant.GetBodyByName("body").body_frame()
+        self._W = plant.world_frame()
+        self._joint_indices = [
+            plant.GetJointByName(j).position_start()
+            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
+        ]
 
         self.kp_vec = np.zeros(3,) + kp
         self.kd_vec = np.zeros(3,) + kd
@@ -202,17 +226,27 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         self.DeclareAbstractInputPort(
             "trajectory", AbstractValue.Make(PiecewisePolynomial()))
+        self.DeclareAbstractInputPort(
+            "in_contact_interval", AbstractValue.Make(np.array([])))
+
         self.trajectory = None
         self.qdot_trajectory = None
+        self.in_contact_interval = None
 
         self.DeclareVectorInputPort("iiwa_state_measured", 6)
 
         self.DeclareVectorInputPort("ee_force_measured", 3)
 
+        self.DeclareAbstractInputPort(
+            "body_poses", AbstractValue.Make([RigidTransform()])
+        )
+
         #self.DeclareVectorOutputPort(
         #    "iiwa_position_command", 3, self.CalcPositionOutput
         #)
         self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
+
+        self.X_Wshelf = None
 
 
     def CalcPositionOutput(self, context, output):
@@ -229,9 +263,17 @@ class TrajFollowingJointStiffnessController(LeafSystem):
             self.trajectory = self.GetInputPort('trajectory').Eval(context)
             self.qdot_trajectory = self.trajectory.MakeDerivative()
 
+        if self.in_contact_interval is None:
+            self.in_contact_interval = self.GetInputPort('in_contact_interval').Eval(context)
+            if 2 != self.in_contact_interval.size:
+                raise Exception(f'should be an interval, but its shaped: {self.in_contact_interval.shape}')
+
+        if self.X_Wshelf is None:
+            self.X_Wshelf = self.GetInputPort("body_poses").Eval(context)[self._shelf_body_instance]
+
         target_time = context.get_time()
 
-        x_ = self.GetInputPort('ee_force_measured').Eval(context)
+        f_measured = self.GetInputPort('ee_force_measured').Eval(context)
 
         q_desired = self.trajectory.value(target_time).T.ravel()
         qdot_desired = self.qdot_trajectory.value(target_time).T.ravel()
@@ -249,6 +291,16 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(5,), forces)
         #print('CalcTorqueOutput', self._plant.num_positions(), bias)
 
+        J_G = self._plant.CalcJacobianSpatialVelocity(
+            self._plant_context,
+            JacobianWrtVariable.kQDot,
+            self._G,
+            [0, 0, 0],
+            self._W,
+            self._W,
+        )
+        J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
+
         tau -= bias
         tau = tau[:3]
 
@@ -257,5 +309,17 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         tau += e * self.kp_vec
         tau += e_dot * self.kd_vec
+
+        if self.in_contact_interval[0] <= target_time and target_time <= self.in_contact_interval[1]:
+            # force control
+            R_Wshelf = get_rot2d_from_transform(self.X_Wshelf)
+            f_goal = np.array([0., 10., 0.])
+            e_forces_Shelf = f_goal - f_measured
+            e_forces_W_ = R_Wshelf @ e_forces_Shelf[1:]
+            e_forces_W = np.zeros((3,))
+            e_forces_W[0] = e_forces_Shelf[0]
+            e_forces_W[1:] = e_forces_W_[1:]
+            e_tau = J_G.T @ e_forces_W
+            tau += e_tau
 
         output.SetFromVector(tau)

@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -22,8 +22,7 @@ def get_current_positions(plant, plant_context):
     q_[:3] = q
     return q_
 
-
-def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_context) -> Optional[PiecewisePolynomial]:
+def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_context) -> Optional[Tuple[PiecewisePolynomial, np.array]]:
     '''
     desc
 
@@ -101,4 +100,4 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         q_keyframes = np.array(q_keyframes)
         valid_timestamps = np.arange(0, len(keyframes), step=1.) * 2.
         q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
-        return q_trajectory
+        return q_trajectory, valid_timestamps

@@ -688,6 +688,7 @@ def simulate_2d(args: TwoDArgs):
     controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
     force_sensor = builder.AddSystem(ForceSensor(plant))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
+    builder.ExportInput(controller.GetInputPort('in_contact_interval'), 'in_contact_interval')
 
     builder.Connect(
         controller.GetOutputPort('iiwa_torque_cmd'),
@@ -706,8 +707,10 @@ def simulate_2d(args: TwoDArgs):
         station.GetOutputPort('body_poses'),
         force_sensor.GetInputPort('body_poses')
     )
-
-
+    builder.Connect(
+        station.GetOutputPort('body_poses'),
+        controller.GetInputPort('body_poses')
+    )
     builder.Connect(
         station.GetOutputPort("iiwa_state"),
         controller.GetInputPort("iiwa_state_measured"),
@@ -755,11 +758,14 @@ def simulate_2d(args: TwoDArgs):
     state_monitor = StateMonitor(args.log_destination, plant, diagram)
     simulator.set_monitor(state_monitor.callback)
 
-    trajectory = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
-    if trajectory is None:
+    trajectory_and_ts = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
+    if trajectory_and_ts is None:
         return
+    trajectory, ts = trajectory_and_ts
+    in_contact_interval = ts[1:3]
 
     diagram.GetInputPort('trajectory').FixValue(global_context, trajectory)
+    diagram.GetInputPort('in_contact_interval').FixValue(global_context, in_contact_interval)
     # minimalist_traj_vis(trajectory)
 
     meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
