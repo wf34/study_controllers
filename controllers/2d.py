@@ -689,25 +689,24 @@ def simulate_2d(args: TwoDArgs):
     force_sensor = builder.AddSystem(ForceSensor(plant))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
 
-    #builder.Connect(
-    #    controller.GetOutputPort('iiwa_position_command'), station.GetInputPort("iiwa.position")
-    #)
     builder.Connect(
         controller.GetOutputPort('iiwa_torque_cmd'),
         station.GetInputPort("iiwa_actuation"),
     )
 
     builder.Connect(
-        station.GetOutputPort('reaction_forces'),
-        force_sensor.GetInputPort("spatial_forces_in"),
+        station.GetOutputPort('iiwa_generalized_contact_forces'),
+        force_sensor.GetInputPort("iiwa_inner_forces_in"),
     )
-
+    builder.Connect(
+        station.GetOutputPort('iiwa_state'),
+        force_sensor.GetInputPort("iiwa_state_measured"),
+    )
     builder.Connect(
         station.GetOutputPort('body_poses'),
         force_sensor.GetInputPort('body_poses')
     )
 
-    # builder.Connect(controller.get_output_port(2), logger.get_input_port(0))
 
     builder.Connect(
         station.GetOutputPort("iiwa_state"),

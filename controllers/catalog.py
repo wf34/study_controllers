@@ -1,7 +1,8 @@
 import numpy as np
-
+import numpy.linalg
 from pydrake.all import (
     AbstractValue,
+    BasicVector,
     PiecewisePolynomial,
     LeafSystem,
     RollPitchYaw,
@@ -118,42 +119,72 @@ class ForceSensor(LeafSystem):
     def __init__(self, plant):
         LeafSystem.__init__(self)
         self._plant = plant
+        self._plant_context = plant.CreateDefaultContext()
+        self._iiwa = self._plant.GetModelInstanceByName("iiwa")
         self.set_name('ForceSensor')
 
-        self.DeclareAbstractInputPort(
-            "spatial_forces_in", AbstractValue.Make([SpatialForce()]))
-        body_instance = plant.GetBodyByName("body")
-
-        self._ee = body_instance.body_frame()
-        self._ee_body_index = int(body_instance.index())
-
-        self._sensor_joint = self._plant.GetJointByName('iiwa_link_7_welds_to_body')
-        self._sensor_joint_index = self._sensor_joint.index()
+        self.DeclareVectorInputPort("iiwa_inner_forces_in", BasicVector(3))
+        self.DeclareVectorInputPort("iiwa_state_measured", BasicVector(6))
 
         self.DeclareAbstractInputPort(
-            "body_poses", AbstractValue.Make([RigidTransform()]))
+            "body_poses", AbstractValue.Make([RigidTransform()])
+        )
+        self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
+
+        self._G = plant.GetBodyByName("body").body_frame()
+        self._W = plant.world_frame()
+
+        self._joint_indices = [
+            plant.GetJointByName(j).position_start()
+            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
+        ]
+
+        #body_instance = plant.GetBodyByName("body")
+        #self._ee = body_instance.body_frame()
+        #self._ee_body_index = int(body_instance.index())
+
+        #self._sensor_joint = self._plant.GetJointByName('iiwa_link_7_welds_to_body')
+        #self._sensor_joint_index = self._sensor_joint.index()
 
         self.DeclareVectorOutputPort("sensed_force_out", 3, self.CalcForceOutput)
+        self.X_Wshelf = None
 
 
     def CalcForceOutput(self, context, output):
-        X_WEe = self.GetInputPort("body_poses").Eval(context)[self._ee_body_index]
+        torques = self.GetInputPort("iiwa_inner_forces_in").Eval(context)
 
-        #print(RollPitchYaw(X_WEe.rotation()).vector())
+        if self.X_Wshelf is None:
+            self.X_Wshelf = self.GetInputPort("body_poses").Eval(context)[self._shelf_body_instance]
 
-        spatial_forces = self.GetInputPort("spatial_forces_in").Eval(context)
-        spatial_force = spatial_forces[self._sensor_joint_index]
+        iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
+        q_now = iiwa_state[:3]
+        q_dot_now = iiwa_state[3:]
 
-        # ts = context.get_time()
-        # print(f'//{ts:.3f} {spatial_force}')
-        #if np.linalg.norm(spatial_vec) > 1.e-3:
-        #    print('/', context.get_time(), spatial_vec.T)
-        spatial_vec = np.zeros((3,))
-        print(spatial_force.translational(), spatial_force.rotational())
+        self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
+        self._plant.SetVelocities(self._plant_context, self._iiwa, q_dot_now)
+        J_G = self._plant.CalcJacobianSpatialVelocity(
+            self._plant_context,
+            JacobianWrtVariable.kQDot,
+            self._G,
+            [0, 0, 0],
+            self._W,
+            self._W,
+        )
+        J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
+        J_questionmark = np.linalg.pinv(J_G.T)
+        f = J_questionmark @ torques
 
-        spatial_vec[:2] = spatial_force.translational()[:2]
-        spatial_vec[-1] = spatial_force.rotational()[-1]
-        output.SetFromVector(spatial_vec)
+        # Rows correspond to (pitch, x, z).
+        pitch = RollPitchYaw(self.X_Wshelf.rotation()).pitch_angle()
+        sin_pitch = np.sin(pitch)
+        cos_pitch = np.cos(pitch)
+        R_Wshelf = np.array([cos_pitch, -sin_pitch, sin_pitch, cos_pitch]).reshape((2, 2))
+        f_shelf = R_Wshelf.T @ f[1:]
+
+        tf = np.zeros((3),)
+        tf[0] = f[0]
+        tf[1:] = f_shelf
+        output.SetFromVector(tf)
 
 
 class TrajFollowingJointStiffnessController(LeafSystem):
