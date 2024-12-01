@@ -42,7 +42,7 @@ def plot_forces(args: PlotterArgs):
     plt.plot(t, theta, color='blue')
 
     plt.show()
-    
+
 
 if __name__ == '__main__':
     args = PlotterArgs().parse_args()
