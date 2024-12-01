@@ -48,7 +48,7 @@ from pydrake.all import (
 
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario
-from catalog import TrajFollowingJointStiffnessController
+from catalog import TrajFollowingJointStiffnessController, ForceSensor
 from opt_trajectory import optimize_target_trajectory
 from state_monitor import StateMonitor
 
@@ -686,6 +686,7 @@ def simulate_2d(args: TwoDArgs):
         visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
 
     controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
+    force_sensor = builder.AddSystem(ForceSensor(plant))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
 
     #builder.Connect(
@@ -696,11 +697,26 @@ def simulate_2d(args: TwoDArgs):
         station.GetInputPort("iiwa_actuation"),
     )
 
+    builder.Connect(
+        station.GetOutputPort('reaction_forces'),
+        force_sensor.GetInputPort("spatial_forces_in"),
+    )
+
+    builder.Connect(
+        station.GetOutputPort('body_poses'),
+        force_sensor.GetInputPort('body_poses')
+    )
+
     # builder.Connect(controller.get_output_port(2), logger.get_input_port(0))
 
     builder.Connect(
         station.GetOutputPort("iiwa_state"),
         controller.GetInputPort("iiwa_state_measured"),
+    )
+
+    builder.Connect(
+        force_sensor.GetOutputPort("sensed_force_out"),
+        controller.GetInputPort("ee_force_measured"),
     )
 
     diagram = builder.Build()

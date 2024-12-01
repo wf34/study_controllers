@@ -7,7 +7,9 @@ from pydrake.all import (
     RollPitchYaw,
     JacobianWrtVariable,
     JointStiffnessController,
+    RigidTransform,
     MultibodyForces,
+    SpatialForce,
 )
 
 class TorqueController(LeafSystem):
@@ -112,6 +114,48 @@ class TorqueController(LeafSystem):
         output.SetFromVector(p_pxz_now)
 
 
+class ForceSensor(LeafSystem):
+    def __init__(self, plant):
+        LeafSystem.__init__(self)
+        self._plant = plant
+        self.set_name('ForceSensor')
+
+        self.DeclareAbstractInputPort(
+            "spatial_forces_in", AbstractValue.Make([SpatialForce()]))
+        body_instance = plant.GetBodyByName("body")
+
+        self._ee = body_instance.body_frame()
+        self._ee_body_index = int(body_instance.index())
+
+        self._sensor_joint = self._plant.GetJointByName('iiwa_link_7_welds_to_body')
+        self._sensor_joint_index = self._sensor_joint.index()
+
+        self.DeclareAbstractInputPort(
+            "body_poses", AbstractValue.Make([RigidTransform()]))
+
+        self.DeclareVectorOutputPort("sensed_force_out", 3, self.CalcForceOutput)
+
+
+    def CalcForceOutput(self, context, output):
+        X_WEe = self.GetInputPort("body_poses").Eval(context)[self._ee_body_index]
+
+        #print(RollPitchYaw(X_WEe.rotation()).vector())
+
+        spatial_forces = self.GetInputPort("spatial_forces_in").Eval(context)
+        spatial_force = spatial_forces[self._sensor_joint_index]
+
+        # ts = context.get_time()
+        # print(f'//{ts:.3f} {spatial_force}')
+        #if np.linalg.norm(spatial_vec) > 1.e-3:
+        #    print('/', context.get_time(), spatial_vec.T)
+        spatial_vec = np.zeros((3,))
+        print(spatial_force.translational(), spatial_force.rotational())
+
+        spatial_vec[:2] = spatial_force.translational()[:2]
+        spatial_vec[-1] = spatial_force.rotational()[-1]
+        output.SetFromVector(spatial_vec)
+
+
 class TrajFollowingJointStiffnessController(LeafSystem):
     def __init__(self, plant, kp, kd):
         LeafSystem.__init__(self)
@@ -131,6 +175,8 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         self.qdot_trajectory = None
 
         self.DeclareVectorInputPort("iiwa_state_measured", 6)
+
+        self.DeclareVectorInputPort("ee_force_measured", 3)
 
         #self.DeclareVectorOutputPort(
         #    "iiwa_position_command", 3, self.CalcPositionOutput
@@ -154,6 +200,8 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         target_time = context.get_time()
 
+        x_ = self.GetInputPort('ee_force_measured').Eval(context)
+
         q_desired = self.trajectory.value(target_time).T.ravel()
         qdot_desired = self.qdot_trajectory.value(target_time).T.ravel()
 
@@ -172,6 +220,7 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         tau -= bias
         tau = tau[:3]
+
         e = q_desired - q_now
         e_dot = qdot_desired - qdot_now
 
