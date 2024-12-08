@@ -13,6 +13,7 @@ from pydrake.all import (
     RollPitchYaw,
     Sphere,
     Rgba,
+    Adder,
     ApplyLcmBusConfig,
     DrakeLcmParams,
     Diagram,
@@ -48,7 +49,7 @@ from pydrake.all import (
 
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario
-from catalog import TrajFollowingJointStiffnessController, ForceSensor
+from catalog import TrajFollowingJointStiffnessController, HybridCartesianController, ForceSensor
 from opt_trajectory import optimize_target_trajectory
 from state_monitor import StateMonitor
 
@@ -580,6 +581,7 @@ class TwoDArgs(Tap):
     target_browser_for_replay: str = 'xdg-open'
     diagram_destination: str = 'diagram.png'
     log_destination: str = '2d-log.json'
+    select_controller: typing.Literal['stiffness', 'hybrid'] = 'stiffness'
     use_traj_vis: bool = False
 
 
@@ -685,40 +687,64 @@ def simulate_2d(args: TwoDArgs):
     if args.use_traj_vis:
         visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
 
+    adder = builder.AddSystem(Adder(2, 3))
     controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
-    force_sensor = builder.AddSystem(ForceSensor(plant))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
-    builder.ExportInput(controller.GetInputPort('in_contact_interval'), 'in_contact_interval')
+    builder.ExportInput(controller.GetInputPort('switched_on_intervals'), 'stiff_c_switched_on_intervals')
 
-    builder.Connect(
-        controller.GetOutputPort('iiwa_torque_cmd'),
-        station.GetInputPort("iiwa_actuation"),
-    )
+    if 'stiffness' == args.select_controller:
+        builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
+    elif 'hybrid' == args.select_controller:
+        force_sensor = builder.AddSystem(ForceSensor(plant))
+        hyb_controller = builder.AddSystem(HybridCartesianController(plant))
+        builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
 
-    builder.Connect(
-        station.GetOutputPort('iiwa_generalized_contact_forces'),
-        force_sensor.GetInputPort("iiwa_inner_forces_in"),
-    )
-    builder.Connect(
-        station.GetOutputPort('iiwa_state'),
-        force_sensor.GetInputPort("iiwa_state_measured"),
-    )
-    builder.Connect(
-        station.GetOutputPort('body_poses'),
-        force_sensor.GetInputPort('body_poses')
-    )
-    builder.Connect(
-        station.GetOutputPort('body_poses'),
-        controller.GetInputPort('body_poses')
-    )
+        builder.Connect(
+            station.GetOutputPort('iiwa_generalized_contact_forces'),
+            force_sensor.GetInputPort("iiwa_inner_forces_in"),
+        )
+        builder.Connect(
+            force_sensor.GetOutputPort("sensed_force_out"),
+            hyb_controller.GetInputPort("ee_force_measured"),
+        )
+        builder.Connect(
+            station.GetOutputPort('iiwa_state'),
+            force_sensor.GetInputPort("iiwa_state_measured"),
+        )
+        builder.Connect(
+            station.GetOutputPort('body_poses'),
+            force_sensor.GetInputPort('body_poses')
+        )
+
+        builder.Connect(
+            station.GetOutputPort('body_poses'),
+            hyb_controller.GetInputPort('body_poses')
+        )
+
+        builder.Connect(
+            station.GetOutputPort("iiwa_state"),
+            hyb_controller.GetInputPort("iiwa_state_measured"),
+        )
+
+        builder.Connect(
+            hyb_controller.GetOutputPort('iiwa_torque_cmd'),
+            adder.get_input_port(1)
+        )
+
+    else:
+        raise Exception('unknown controller requested')
+
     builder.Connect(
         station.GetOutputPort("iiwa_state"),
         controller.GetInputPort("iiwa_state_measured"),
     )
-
     builder.Connect(
-        force_sensor.GetOutputPort("sensed_force_out"),
-        controller.GetInputPort("ee_force_measured"),
+        controller.GetOutputPort('iiwa_torque_cmd'),
+        adder.get_input_port(0)
+    )
+    builder.Connect(
+        adder.get_output_port(),
+        station.GetInputPort("iiwa_actuation"),
     )
 
     diagram = builder.Build()
@@ -755,9 +781,6 @@ def simulate_2d(args: TwoDArgs):
     X_Wpstart = RigidTransform(Xs_WG.translation() - dominant_axis_W + minor_axis_W)
     X_Wpend = RigidTransform(Xs_WG.translation() + dominant_axis_W + minor_axis_W)
 
-    state_monitor = StateMonitor(args.log_destination, plant, diagram)
-    simulator.set_monitor(state_monitor.callback)
-
     trajectory_and_ts = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
     if trajectory_and_ts is None:
         return
@@ -765,7 +788,19 @@ def simulate_2d(args: TwoDArgs):
     in_contact_interval = ts[1:3]
 
     diagram.GetInputPort('trajectory').FixValue(global_context, trajectory)
-    diagram.GetInputPort('in_contact_interval').FixValue(global_context, in_contact_interval)
+
+    if 'stiffness' == args.select_controller:
+        diagram.GetInputPort('torque_adder_2nd_term').FixValue(global_context, np.zeros((3),))
+        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[-1]]]))
+
+    elif 'hybrid' == args.select_controller:
+        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[1]],
+                                                                                                 [ts[2], ts[3]]]))
+        diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[1], ts[2]]]))
+
+        state_monitor = StateMonitor(args.log_destination, plant, diagram)
+        simulator.set_monitor(state_monitor.callback)
+
     # minimalist_traj_vis(trajectory)
 
     meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))

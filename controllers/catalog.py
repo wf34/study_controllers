@@ -13,6 +13,15 @@ from pydrake.all import (
     SpatialForce,
 )
 
+
+def is_within_intervals(target_time: float, intervals: np.array) -> bool:
+    for i in range(intervals.shape[0]):
+        start, end = intervals[i]
+        if intervals[i, 0] <= target_time and target_time < intervals[i, 1]:
+            return True
+    return False
+
+
 class TorqueController(LeafSystem):
     """Wrapper System for Commanding Pure Torques to planar iiwa.
     @param plant MultibodyPlant of the simulated plant.
@@ -210,14 +219,7 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
 
-        self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
         self._iiwa = plant.GetModelInstanceByName("iiwa")
-        self._G = plant.GetBodyByName("body").body_frame()
-        self._W = plant.world_frame()
-        self._joint_indices = [
-            plant.GetJointByName(j).position_start()
-            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
-        ]
 
         self.kp_vec = np.zeros(3,) + kp
         self.kd_vec = np.zeros(3,) + kd
@@ -227,26 +229,18 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         self.DeclareAbstractInputPort(
             "trajectory", AbstractValue.Make(PiecewisePolynomial()))
         self.DeclareAbstractInputPort(
-            "in_contact_interval", AbstractValue.Make(np.array([])))
+            "switched_on_intervals", AbstractValue.Make(np.array([])))
 
         self.trajectory = None
         self.qdot_trajectory = None
-        self.in_contact_interval = None
+        self.switched_on_intervals = None
 
         self.DeclareVectorInputPort("iiwa_state_measured", 6)
-
-        self.DeclareVectorInputPort("ee_force_measured", 3)
-
-        self.DeclareAbstractInputPort(
-            "body_poses", AbstractValue.Make([RigidTransform()])
-        )
 
         #self.DeclareVectorOutputPort(
         #    "iiwa_position_command", 3, self.CalcPositionOutput
         #)
         self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
-
-        self.X_Wshelf = None
 
 
     def CalcPositionOutput(self, context, output):
@@ -263,20 +257,19 @@ class TrajFollowingJointStiffnessController(LeafSystem):
             self.trajectory = self.GetInputPort('trajectory').Eval(context)
             self.qdot_trajectory = self.trajectory.MakeDerivative()
 
-        if self.in_contact_interval is None:
-            self.in_contact_interval = self.GetInputPort('in_contact_interval').Eval(context)
-            if 2 != self.in_contact_interval.size:
-                raise Exception(f'should be an interval, but its shaped: {self.in_contact_interval.shape}')
+        if self.switched_on_intervals is None:
+            self.switched_on_intervals = self.GetInputPort('switched_on_intervals').Eval(context)
+            if 2 == len(self.switched_on_intervals.shape) and \
+               2 != self.switched_on_intervals.shape[1]:
+                raise Exception(f'each row must be an interval, but is mishaped: {self.switched_on_intervals.shape}')
 
-        if self.X_Wshelf is None:
-            self.X_Wshelf = self.GetInputPort("body_poses").Eval(context)[self._shelf_body_instance]
+        current_time = context.get_time()
+        if not is_within_intervals(current_time, self.switched_on_intervals):
+            output.SetFromVector(np.zeros((3),))
+            return
 
-        target_time = context.get_time()
-
-        f_measured = self.GetInputPort('ee_force_measured').Eval(context)
-
-        q_desired = self.trajectory.value(target_time).T.ravel()
-        qdot_desired = self.qdot_trajectory.value(target_time).T.ravel()
+        q_desired = self.trajectory.value(current_time).T.ravel()
+        qdot_desired = self.qdot_trajectory.value(current_time).T.ravel()
 
         state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
         q_now = state_now[:3]
@@ -284,12 +277,77 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
         self._plant.SetVelocities(self._plant_context, self._iiwa, qdot_now)
-        bias = self._plant.CalcBiasTerm(self._plant_context)
+        bias = self._plant.CalcBiasTerm(self._plant_context) # coreolis + gyscopic effects
 
         forces = MultibodyForces(plant=self._plant)
-        self._plant.CalcForceElementsContribution(self._plant_context, forces)
+        self._plant.CalcForceElementsContribution(self._plant_context, forces) # gravity and forces aplied to model
+        # 0 = dynamics(tau, state) ; a = (f, state) a = F / m; F = ma
         tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(5,), forces)
         #print('CalcTorqueOutput', self._plant.num_positions(), bias)
+
+        tau -= bias
+        tau = tau[:3]
+
+        e = q_desired - q_now
+        e_dot = qdot_desired - qdot_now
+
+        tau += e * self.kp_vec
+        tau += e_dot * self.kd_vec
+        output.SetFromVector(tau)
+
+
+class HybridCartesianController(LeafSystem):
+    def __init__(self, plant):
+        LeafSystem.__init__(self)
+        self._plant = plant
+        self._plant_context = plant.CreateDefaultContext()
+        self.X_Wshelf = None
+        self.switched_on_intervals = None
+
+        self._iiwa = plant.GetModelInstanceByName("iiwa")
+        self._G = plant.GetBodyByName("body").body_frame()
+        self._W = plant.world_frame()
+
+        self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
+        self._joint_indices = [
+            plant.GetJointByName(j).position_start()
+            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
+        ]
+
+        self.DeclareAbstractInputPort(
+            "switched_on_intervals", AbstractValue.Make(np.array([])))
+
+        self.DeclareAbstractInputPort(
+            "body_poses", AbstractValue.Make([RigidTransform()])
+        )
+        self.DeclareVectorInputPort("ee_force_measured", 3)
+        self.DeclareVectorInputPort("iiwa_state_measured", 6)
+        self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
+
+
+    def CalcTorqueOutput(self, context, output):
+        if self.X_Wshelf is None:
+            self.X_Wshelf = self.GetInputPort("body_poses").Eval(context)[self._shelf_body_instance]
+
+        if self.switched_on_intervals is None:
+            self.switched_on_intervals = self.GetInputPort('switched_on_intervals').Eval(context)
+            if 2 == len(self.switched_on_intervals.shape) and \
+               2 != self.switched_on_intervals.shape[1]:
+                raise Exception(f'each row must be an interval, but is mishaped: {self.switched_on_intervals.shape}')
+
+        current_time = context.get_time()
+        if not is_within_intervals(current_time, self.switched_on_intervals):
+            output.SetFromVector(np.zeros((3),))
+            return
+
+        f_measured = self.GetInputPort('ee_force_measured').Eval(context)
+        state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
+
+        q_now = state_now[:3]
+        qdot_now = state_now[3:]
+
+        self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
+        self._plant.SetVelocities(self._plant_context, self._iiwa, qdot_now)
 
         J_G = self._plant.CalcJacobianSpatialVelocity(
             self._plant_context,
@@ -301,25 +359,15 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         )
         J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
 
-        tau -= bias
-        tau = tau[:3]
-
-        e = q_desired - q_now
-        e_dot = qdot_desired - qdot_now
-
-        tau += e * self.kp_vec
-        tau += e_dot * self.kd_vec
-
-        if self.in_contact_interval[0] <= target_time and target_time <= self.in_contact_interval[1]:
-            # force control
-            R_Wshelf = get_rot2d_from_transform(self.X_Wshelf)
-            f_goal = np.array([0., 10., 0.])
-            e_forces_Shelf = f_goal - f_measured
-            e_forces_W_ = R_Wshelf @ e_forces_Shelf[1:]
-            e_forces_W = np.zeros((3,))
-            e_forces_W[0] = e_forces_Shelf[0]
-            e_forces_W[1:] = e_forces_W_[1:]
-            e_tau = J_G.T @ e_forces_W
-            tau += e_tau
+        # force control
+        R_Wshelf = get_rot2d_from_transform(self.X_Wshelf)
+        f_goal = np.array([0., 10., 0.])
+        e_forces_Shelf = f_goal - f_measured
+        e_forces_W_ = R_Wshelf @ e_forces_Shelf[1:]
+        e_forces_W = np.zeros((3,))
+        e_forces_W[0] = e_forces_Shelf[0]
+        e_forces_W[1:] = e_forces_W_[1:]
+        e_tau = J_G.T @ e_forces_W
+        tau = e_tau / 100
 
         output.SetFromVector(tau)
