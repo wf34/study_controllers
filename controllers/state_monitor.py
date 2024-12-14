@@ -18,11 +18,17 @@ class Vector3(BaseModel):
     def instantiate_from_arr(arr: Union[np.array, List]):
         if isinstance(arr, np.ndarray):
             arr = arr.tolist()
-        if 3 != len(arr):
+        if len(arr) < 2 or len(arr) > 3:
             raise Exception('size err')
+        if len(arr) == 2:
+            arr = [arr[0]] + [0.] + [arr[1]]
+
         dct = {}
         for i, n in zip(range(3), ['x', 'y', 'z']):
             dct[n] = arr[i]
+
+        # because in jac in was ry, tx, tz, but for vis. purposes we prefer normal order: x,y,z
+        dct['y'], dct['x'] = dct['x'], dct['y']
 
         return Vector3(**dct)
 

@@ -32,15 +32,16 @@ def plot_forces(args: PlotterArgs):
     theta = []
 
     for d in datums:
-        t.append(d.time)
-        fx.append(d.reaction_forces.x)
-        fy.append(d.reaction_forces.y)
-        theta.append(d.reaction_forces.z)
+        if 2.0 <= d.time and d.time <= 4.0:
+            t.append(d.time)
+            fx.append(d.reaction_forces.x)
+            fy.append(d.reaction_forces.y)
+            theta.append(d.reaction_forces.z)
 
-    plt.plot(t, fx, color='red', linewidth=4)
-    plt.plot(t, fy, color='green', linewidth=2)
-    plt.plot(t, theta, color='blue')
-
+    plt.plot(t, fx, color='red', linewidth=4, label='My')
+    plt.plot(t, fy, color='green', linewidth=2, label='fx')
+    plt.plot(t, theta, color='blue', label='fz')
+    plt.legend()
     plt.show()
 
 

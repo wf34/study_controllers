@@ -7,9 +7,9 @@ from pydrake.all import (
     RotationMatrix,
     InverseKinematics,
     PiecewisePolynomial,
+    PiecewisePose,
     Solve,
     RollPitchYaw,
-    PiecewisePolynomial,
 )
 
 
@@ -101,3 +101,9 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         valid_timestamps = np.arange(0, len(keyframes), step=1.) * 2.
         q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
         return q_trajectory, valid_timestamps
+
+
+def make_cartesian_trajectory(keyframes: List[RigidTransform], timestamps: List[float]) -> PiecewisePose:
+    if len(keyframes) != len(timestamps):
+        raise Exception('bad input')
+    return PiecewisePose.MakeLinear(timestamps, keyframes)

@@ -50,8 +50,9 @@ from pydrake.all import (
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario
 from catalog import TrajFollowingJointStiffnessController, HybridCartesianController, ForceSensor
-from opt_trajectory import optimize_target_trajectory
+from opt_trajectory import optimize_target_trajectory, make_cartesian_trajectory
 from state_monitor import StateMonitor
+from visualization_tools import AddMeshcatTriad
 
 TIME_STEP=0.001  # faster
 INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., -np.pi / 2.])
@@ -689,15 +690,16 @@ def simulate_2d(args: TwoDArgs):
 
     adder = builder.AddSystem(Adder(2, 3))
     controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
-    builder.ExportInput(controller.GetInputPort('trajectory'), 'trajectory')
+    builder.ExportInput(controller.GetInputPort('trajectory'), 'inner_trajectory')
     builder.ExportInput(controller.GetInputPort('switched_on_intervals'), 'stiff_c_switched_on_intervals')
 
     if 'stiffness' == args.select_controller:
         builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
     elif 'hybrid' == args.select_controller:
         force_sensor = builder.AddSystem(ForceSensor(plant))
-        hyb_controller = builder.AddSystem(HybridCartesianController(plant))
+        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 1.))
         builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
+        builder.ExportInput(hyb_controller.GetInputPort('trajectory'), 'cartesian_trajectory')
 
         builder.Connect(
             station.GetOutputPort('iiwa_generalized_contact_forces'),
@@ -719,6 +721,10 @@ def simulate_2d(args: TwoDArgs):
         builder.Connect(
             station.GetOutputPort('body_poses'),
             hyb_controller.GetInputPort('body_poses')
+        )
+        builder.Connect(
+            station.GetOutputPort('body_spatial_velocities'),
+            hyb_controller.GetInputPort('body_spatial_velocities')
         )
 
         builder.Connect(
@@ -783,17 +789,21 @@ def simulate_2d(args: TwoDArgs):
 
     trajectory_and_ts = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
     if trajectory_and_ts is None:
+        print('opt didnt succeed')
         return
-    trajectory, ts = trajectory_and_ts
-    in_contact_interval = ts[1:3]
 
-    diagram.GetInputPort('trajectory').FixValue(global_context, trajectory)
+    trajectory, ts = trajectory_and_ts
+
+    diagram.GetInputPort('inner_trajectory').FixValue(global_context, trajectory)
 
     if 'stiffness' == args.select_controller:
         diagram.GetInputPort('torque_adder_2nd_term').FixValue(global_context, np.zeros((3),))
         diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[-1]]]))
 
     elif 'hybrid' == args.select_controller:
+        cart_trajectory = make_cartesian_trajectory([X_Wpstart, X_Wpend], [ts[1], ts[2]])
+        diagram.GetInputPort('cartesian_trajectory').FixValue(global_context, cart_trajectory)
+
         diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[1]],
                                                                                                  [ts[2], ts[3]]]))
         diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[1], ts[2]]]))
@@ -809,6 +819,7 @@ def simulate_2d(args: TwoDArgs):
     meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
     meshcat.SetTransform("end", X_Wpend)
 
+    AddMeshcatTriad(meshcat, 'shelf_frame', X_PT=Xs_WG)
 
     if args.use_traj_vis:
         rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)

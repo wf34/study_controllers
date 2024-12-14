@@ -4,6 +4,7 @@ from pydrake.all import (
     AbstractValue,
     BasicVector,
     PiecewisePolynomial,
+    PiecewisePose,
     LeafSystem,
     RollPitchYaw,
     JacobianWrtVariable,
@@ -11,6 +12,7 @@ from pydrake.all import (
     RigidTransform,
     MultibodyForces,
     SpatialForce,
+    SpatialVelocity
 )
 
 
@@ -124,11 +126,28 @@ class TorqueController(LeafSystem):
         output.SetFromVector(p_pxz_now)
 
 
-def get_rot2d_from_transform(X: RigidTransform) -> np.array:
-    pitch = RollPitchYaw(X.rotation()).pitch_angle()
+def get_rot2d_from_transform(X_Wo: RigidTransform) -> np.array:
+    pitch = RollPitchYaw(X_Wo.rotation()).pitch_angle()
     sin_pitch = np.sin(pitch)
     cos_pitch = np.cos(pitch)
     return np.array([cos_pitch, -sin_pitch, sin_pitch, cos_pitch]).reshape((2, 2))
+
+
+def get_transl2d_from_transform(X_Wo: RigidTransform) -> np.array:
+    t = X_Wo.translation()
+    return np.array([t[0], t[2]])
+
+
+def get_vel2d_from_spatial_velocity(v_o_W: np.array) -> np.array:
+    if len(v_o_W.shape) == 2:
+        x = v_o_W[3:, :].ravel()
+    elif len(v_o_W.shape) == 1:
+        x = v_o_W[3:]
+    else:
+        raise Exception('')
+
+    assert x.size == 3
+    return np.array([x[0], x[2]])
 
 
 class ForceSensor(LeafSystem):
@@ -171,6 +190,7 @@ class ForceSensor(LeafSystem):
 
         if self.X_Wshelf is None:
             self.X_Wshelf = self.GetInputPort("body_poses").Eval(context)[self._shelf_body_instance]
+            #print('shelf pitch: ', RollPitchYaw(self.X_Wshelf.rotation()).pitch_angle())
 
         iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
         q_now = iiwa_state[:3]
@@ -186,7 +206,9 @@ class ForceSensor(LeafSystem):
             self._W,
             self._W,
         )
+                         # ry, tx, tz
         J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
+
         J_questionmark = np.linalg.pinv(J_G.T)
 
         #Jq_p_AoBi_E = self._plant.CalcJacobianPositionVector(
@@ -198,19 +220,17 @@ class ForceSensor(LeafSystem):
         #)
         #Jq_p_AoBi_E = Jq_p_AoBi_E[np.ix_([0, 2], self._joint_indices)]
         #J_questionmark_questionmark = np.linalg.pinv(Jq_p_AoBi_E.T)
-
         #print(J_G, '\n', J_questionmark, '\n---\nNew Jac:\n')
         #print(Jq_p_AoBi_E, '\n', J_questionmark_questionmark, '\n===\n')
-        f = J_questionmark @ torques
+
+        f_shelf_W = J_questionmark @ torques
 
         # Rows correspond to (pitch, x, z).
-        R_Wshelf = get_rot2d_from_transform(self.X_Wshelf)
-        f_shelf = R_Wshelf.T @ f[1:]
+        R_shelfW = get_rot2d_from_transform(self.X_Wshelf.inverse())
+        f_shelf = R_shelfW @ f_shelf_W[1:]
 
-        tf = np.zeros((3),)
-        tf[0] = f[0]
-        tf[1:] = f_shelf
-        output.SetFromVector(tf)
+        f_shelf = np.pad(f_shelf, (1, 0), mode='constant', constant_values=f_shelf_W[0])
+        output.SetFromVector(f_shelf)
 
 
 class TrajFollowingJointStiffnessController(LeafSystem):
@@ -297,18 +317,28 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
 
 class HybridCartesianController(LeafSystem):
-    def __init__(self, plant):
+    def __init__(self, plant, kp_tang: float, kd_tang: float, kf_norm: float):
         LeafSystem.__init__(self)
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
         self.X_Wshelf = None
         self.switched_on_intervals = None
 
+        self.cart_trajectory = None
+        self.vel_trajectory = None
+
+        self.kp_tang_vec = np.zeros(3,) + kp_tang
+        self.kd_tang_vec = np.zeros(3,) + kd_tang
+        self.kf_norm_vec = np.zeros(3,) + kf_norm
+
         self._iiwa = plant.GetModelInstanceByName("iiwa")
-        self._G = plant.GetBodyByName("body").body_frame()
+        end_effector = plant.GetBodyByName("body")
+        self._G = end_effector.body_frame()
         self._W = plant.world_frame()
 
         self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
+        self._ee_body_instance = end_effector.index()
+
         self._joint_indices = [
             plant.GetJointByName(j).position_start()
             for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
@@ -320,6 +350,13 @@ class HybridCartesianController(LeafSystem):
         self.DeclareAbstractInputPort(
             "body_poses", AbstractValue.Make([RigidTransform()])
         )
+        self.DeclareAbstractInputPort(
+            "body_spatial_velocities", AbstractValue.Make([SpatialVelocity()])
+        )
+
+        self.DeclareAbstractInputPort(
+            "trajectory", AbstractValue.Make(PiecewisePose()))
+
         self.DeclareVectorInputPort("ee_force_measured", 3)
         self.DeclareVectorInputPort("iiwa_state_measured", 6)
         self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
@@ -329,6 +366,11 @@ class HybridCartesianController(LeafSystem):
         if self.X_Wshelf is None:
             self.X_Wshelf = self.GetInputPort("body_poses").Eval(context)[self._shelf_body_instance]
 
+        if self.cart_trajectory is None:
+            self.cart_trajectory = self.GetInputPort('trajectory').Eval(context)
+            self.vel_trajectory = self.cart_trajectory.MakeDerivative()
+            self.traj_intervals = np.array([self.cart_trajectory.start_time(), self.cart_trajectory.end_time()])[np.newaxis, :]
+
         if self.switched_on_intervals is None:
             self.switched_on_intervals = self.GetInputPort('switched_on_intervals').Eval(context)
             if 2 == len(self.switched_on_intervals.shape) and \
@@ -336,11 +378,11 @@ class HybridCartesianController(LeafSystem):
                 raise Exception(f'each row must be an interval, but is mishaped: {self.switched_on_intervals.shape}')
 
         current_time = context.get_time()
-        if not is_within_intervals(current_time, self.switched_on_intervals):
+        if not is_within_intervals(current_time, self.switched_on_intervals) or \
+           not is_within_intervals(current_time, self.traj_intervals):
             output.SetFromVector(np.zeros((3),))
             return
 
-        f_measured = self.GetInputPort('ee_force_measured').Eval(context)
         state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
 
         q_now = state_now[:3]
@@ -348,6 +390,15 @@ class HybridCartesianController(LeafSystem):
 
         self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
         self._plant.SetVelocities(self._plant_context, self._iiwa, qdot_now)
+
+        bias = self._plant.CalcBiasTerm(self._plant_context) # coreolis + gyscopic effects
+        forces = MultibodyForces(plant=self._plant)
+        inner_gravity = self._plant.CalcGravityGeneralizedForces(self._plant_context)
+        np.copyto(forces.mutable_generalized_forces(), inner_gravity)
+
+        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(5,), forces)
+        tau -= bias
+        tau = tau[:3]
 
         J_G = self._plant.CalcJacobianSpatialVelocity(
             self._plant_context,
@@ -357,17 +408,50 @@ class HybridCartesianController(LeafSystem):
             self._W,
             self._W,
         )
+                         # ry, tx, tz
         J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
 
-        # force control
         R_Wshelf = get_rot2d_from_transform(self.X_Wshelf)
-        f_goal = np.array([0., 10., 0.])
-        e_forces_Shelf = f_goal - f_measured
-        e_forces_W_ = R_Wshelf @ e_forces_Shelf[1:]
-        e_forces_W = np.zeros((3,))
-        e_forces_W[0] = e_forces_Shelf[0]
-        e_forces_W[1:] = e_forces_W_[1:]
-        e_tau = J_G.T @ e_forces_W
-        tau = e_tau / 100
+        R_shelfW = R_Wshelf.T
+
+        # cartesian pos control
+        td_ee_W = get_transl2d_from_transform(RigidTransform(self.cart_trajectory.value(current_time)))
+        vd_ee_W = get_vel2d_from_spatial_velocity(self.vel_trajectory.value(current_time))
+
+        t_G_W = get_transl2d_from_transform(self.GetInputPort("body_poses").Eval(context)[self._ee_body_instance])
+        v_G_W = get_vel2d_from_spatial_velocity(self.GetInputPort("body_spatial_velocities").Eval(context)[self._ee_body_instance].get_coeffs())
+
+        te_ee_s = R_shelfW @ (td_ee_W - t_G_W)
+        ve_ee_s = R_shelfW @ (vd_ee_W - v_G_W)
+
+        # normal direction isnt used
+        te_ee_s[1] = 0
+        ve_ee_s[1] = 0
+
+        te_ee_W = R_Wshelf @ te_ee_s
+        ve_ee_W = R_Wshelf @ ve_ee_s
+
+        te_ee_W = np.pad(te_ee_W, (1, 0), mode='constant', constant_values=0.)
+        ve_ee_W = np.pad(ve_ee_W, (1, 0), mode='constant', constant_values=0.)
+
+        q_e_tang = J_G.T @ te_ee_W
+        qdot_e_tang = J_G.T @ te_ee_W
+
+        tau += q_e_tang * self.kp_tang_vec
+        tau += qdot_e_tang * self.kd_tang_vec
+
+        # force control
+        f_measured = self.GetInputPort('ee_force_measured').Eval(context)
+        f_goal = np.array([0., 0., 10.])
+        fe_shelf = f_goal - f_measured
+        # tangential direction isnt used
+        fe_shelf[1] = 0.
+        fe_shelf_W = R_Wshelf @ fe_shelf[1:]
+
+        # adds ry at start
+        fe_shelf_W = np.pad(fe_shelf_W, (1, 0), mode='constant', constant_values=0.) # doesnt work with pitch momentum (fe_shelf[0])
+
+        e_tau = J_G.T @ fe_shelf_W
+        tau += e_tau * self.kf_norm_vec
 
         output.SetFromVector(tau)
