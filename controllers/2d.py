@@ -697,7 +697,7 @@ def simulate_2d(args: TwoDArgs):
         builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
     elif 'hybrid' == args.select_controller:
         force_sensor = builder.AddSystem(ForceSensor(plant))
-        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 1.))
+        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 10., 20., 1.))
         builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
         builder.ExportInput(hyb_controller.GetInputPort('trajectory'), 'cartesian_trajectory')
 
