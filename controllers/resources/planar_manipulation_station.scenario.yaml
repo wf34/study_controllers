@@ -31,5 +31,5 @@ directives:
     child: robot_table::link
     X_PC:
         translation: [0, 0, -0.7645]
-model_drivers:
-    wsg: !SchunkWsgDriver {}
+#model_drivers:
+#    wsg: !SchunkWsgDriver {}

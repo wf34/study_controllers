@@ -78,7 +78,6 @@ def rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat):
         q_[:3, :] = x
         plant.SetPositions(plant_context, q_)
         Xeecurrent_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
-        #print(RollPitchYaw(Xeecurrent_WG.rotation()))
         visualizer.ForcedPublish(visualizer_context)
     visualizer.StopRecording()
     visualizer.PublishRecording()
@@ -668,7 +667,10 @@ def MakeHardwareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize
 
 def Setup(parser):
     parser.plant().set_discrete_contact_approximation(
-        DiscreteContactApproximation.kLagged
+        DiscreteContactApproximation.kTamsi
+        # kLagged
+        # kTamsi
+        # kSap
     )
 
 
@@ -697,7 +699,7 @@ def simulate_2d(args: TwoDArgs):
         builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
     elif 'hybrid' == args.select_controller:
         force_sensor = builder.AddSystem(ForceSensor(plant))
-        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 50., 1., 1.))
+        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 1., 1.))
         builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
         builder.ExportInput(hyb_controller.GetInputPort('trajectory'), 'cartesian_trajectory')
 
@@ -761,9 +763,6 @@ def simulate_2d(args: TwoDArgs):
         global_context = simulator.get_mutable_context()
     else:
         global_context = diagram.CreateDefaultContext()
-
-    station_context = station.GetMyContextFromRoot(global_context)
-    station.GetInputPort("wsg.position").FixValue(station_context, [0.0])
 
     plant_context = plant.GetMyContextFromRoot(global_context)
     plant.SetPositions(
