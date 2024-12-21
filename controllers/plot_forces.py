@@ -32,7 +32,7 @@ def plot_forces(args: PlotterArgs):
     theta = []
 
     for d in datums:
-        if 2.0 <= d.time and d.time <= 4.0:
+        if 2.0 <= d.time and d.time <= 14.0:
             t.append(d.time)
             fx.append(d.reaction_forces.x)
             fy.append(d.reaction_forces.y)

@@ -697,7 +697,7 @@ def simulate_2d(args: TwoDArgs):
         builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
     elif 'hybrid' == args.select_controller:
         force_sensor = builder.AddSystem(ForceSensor(plant))
-        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 10., 20., 1.))
+        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 50., 1., 1.))
         builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
         builder.ExportInput(hyb_controller.GetInputPort('trajectory'), 'cartesian_trajectory')
 
@@ -813,11 +813,11 @@ def simulate_2d(args: TwoDArgs):
 
     # minimalist_traj_vis(trajectory)
 
-    meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
-    meshcat.SetTransform("start", X_Wpstart)
+    #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
+    #meshcat.SetTransform("start", X_Wpstart)
 
-    meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
-    meshcat.SetTransform("end", X_Wpend)
+    #meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
+    #meshcat.SetTransform("end", X_Wpend)
 
     AddMeshcatTriad(meshcat, 'shelf_frame', X_PT=Xs_WG)
 

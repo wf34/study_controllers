@@ -36,6 +36,17 @@ def get_transl2d_from_transform(X_Wo: RigidTransform) -> np.array:
     return np.array([t[0], t[2]])
 
 
+def get_pitch_from_transform(X_Wo: RigidTransform) -> np.array:
+    return RollPitchYaw(X_Wo.rotation()).pitch_angle()
+
+
+def get_rotvel_from_spatial_velocity(v_o_W: np.array) -> float:
+    if v_o_W.size == 6:
+        return v_o_W.ravel()[1]
+    else:
+        raise Exception('unexpected vel notation')
+
+
 def get_vel2d_from_spatial_velocity(v_o_W: np.array) -> np.array:
     if len(v_o_W.shape) == 2:
         x = v_o_W[3:, :].ravel()
@@ -199,7 +210,7 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
 
 class HybridCartesianController(LeafSystem):
-    def __init__(self, plant, kp_tang: float, kd_tang: float, kf_norm: float):
+    def __init__(self, plant, kp_tang: float, kd_tang: float, kf_norm: float, kfd_norm: float):
         LeafSystem.__init__(self)
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
@@ -212,6 +223,7 @@ class HybridCartesianController(LeafSystem):
         self.kp_tang_vec = np.zeros(3,) + kp_tang
         self.kd_tang_vec = np.zeros(3,) + kd_tang
         self.kf_norm_vec = np.zeros(3,) + kf_norm
+        self.kfd_norm_vec = np.zeros(3,) + kfd_norm
 
         self._iiwa = plant.GetModelInstanceByName("iiwa")
         end_effector = plant.GetBodyByName("body")
@@ -297,11 +309,21 @@ class HybridCartesianController(LeafSystem):
         R_SW = get_rot2d_from_transform(self.X_Wshelf)            # same here
 
         # cartesian pos control
-        td_WG = get_transl2d_from_transform(self.cart_trajectory.GetPose(current_time))
-        vd_WG = get_vel2d_from_spatial_velocity(self.vel_trajectory.value(current_time))
+        pose_desired = self.cart_trajectory.GetPose(current_time)
+        td_WG = get_transl2d_from_transform(pose_desired)
+        rd_WG = -np.pi / 4  #get_pitch_from_transform(pose_desired)
 
-        tm_WG = get_transl2d_from_transform(self.GetInputPort("body_poses").Eval(context)[self._ee_body_instance])
-        vm_WG = get_vel2d_from_spatial_velocity(self.GetInputPort("body_spatial_velocities").Eval(context)[self._ee_body_instance].get_coeffs())
+        velocity_desired = self.vel_trajectory.value(current_time)
+        vd_WG = get_vel2d_from_spatial_velocity(velocity_desired)
+        wd_WG = get_rotvel_from_spatial_velocity(velocity_desired)
+
+        pose_measured = self.GetInputPort("body_poses").Eval(context)[self._ee_body_instance]
+        tm_WG = get_transl2d_from_transform(pose_measured)
+        rm_WG = get_pitch_from_transform(pose_measured)
+
+        velocity_measured = self.GetInputPort("body_spatial_velocities").Eval(context)[self._ee_body_instance].get_coeffs()
+        vm_WG = get_vel2d_from_spatial_velocity(velocity_measured)
+        wm_WG = get_rotvel_from_spatial_velocity(velocity_measured)
 
         te_SG = R_SW @ (td_WG - tm_WG)
         ve_SG = R_SW @ (vd_WG - vm_WG)
@@ -313,13 +335,15 @@ class HybridCartesianController(LeafSystem):
         # but used by f ctrl
         ve_norm_SG[0] = 0.
 
-
         te_WG = R_WS @ te_SG
         ve_WG = R_WS @ ve_SG
         ve_norm_WG = R_WS @ ve_norm_SG
 
-        te_WG = np.pad(te_WG, (1, 0), mode='constant', constant_values=0.)
-        ve_WG = np.pad(ve_WG, (1, 0), mode='constant', constant_values=0.)
+        pitch_err = rd_WG - rm_WG
+        pitch_dot_err = wd_WG - wm_WG
+
+        te_WG = np.pad(te_WG, (1, 0), mode='constant', constant_values=pitch_err)
+        ve_WG = np.pad(ve_WG, (1, 0), mode='constant', constant_values=pitch_dot_err)
         ve_norm_WG = np.pad(ve_norm_WG, (1, 0), mode='constant', constant_values=0.)
 
         q_e_tang = J_G.T @ te_WG
@@ -343,6 +367,6 @@ class HybridCartesianController(LeafSystem):
         ve_norm_tau = J_G.T @ ve_norm_WG
 
         tau += e_tau * self.kf_norm_vec
-        tau += ve_norm_tau
+        tau += ve_norm_tau * self.kfd_norm_vec
 
         output.SetFromVector(tau)
