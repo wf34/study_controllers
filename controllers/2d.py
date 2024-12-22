@@ -15,6 +15,8 @@ from pydrake.all import (
     Rgba,
     Adder,
     ApplyLcmBusConfig,
+    ContactVisualizer,
+    ContactVisualizerParams,
     DrakeLcmParams,
     Diagram,
     DiagramBuilder,
@@ -614,6 +616,17 @@ def MakeHardwareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize
 
     sim_plant.Finalize()
 
+    cparams = ContactVisualizerParams()
+    cparams.force_threshold = 1e-6
+    cparams.moment_threshold = 1e-4
+    cparams.newtons_per_meter = 200.0
+    cparams.radius = 0.004
+    cparams.color=Rgba(.1, .9, .1, .9)
+
+    contact_visualizer = ContactVisualizer.AddToBuilder(
+        builder, sim_plant, meshcat, cparams
+    )
+
     # For some Apply* functions in this workflow, we _never_ want LCM.
     scenario.lcm_buses["opt_out"] = DrakeLcmParams(lcm_url="memq://null")
 
@@ -694,30 +707,18 @@ def simulate_2d(args: TwoDArgs):
     controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'inner_trajectory')
     builder.ExportInput(controller.GetInputPort('switched_on_intervals'), 'stiff_c_switched_on_intervals')
+    force_sensor = builder.AddSystem(ForceSensor(plant))
 
     if 'stiffness' == args.select_controller:
         builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
     elif 'hybrid' == args.select_controller:
-        force_sensor = builder.AddSystem(ForceSensor(plant))
         hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 1., 1.))
         builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
         builder.ExportInput(hyb_controller.GetInputPort('trajectory'), 'cartesian_trajectory')
 
         builder.Connect(
-            station.GetOutputPort('iiwa_generalized_contact_forces'),
-            force_sensor.GetInputPort("iiwa_inner_forces_in"),
-        )
-        builder.Connect(
             force_sensor.GetOutputPort("sensed_force_out"),
             hyb_controller.GetInputPort("ee_force_measured"),
-        )
-        builder.Connect(
-            station.GetOutputPort('iiwa_state'),
-            force_sensor.GetInputPort("iiwa_state_measured"),
-        )
-        builder.Connect(
-            station.GetOutputPort('body_poses'),
-            force_sensor.GetInputPort('body_poses')
         )
 
         builder.Connect(
@@ -741,6 +742,19 @@ def simulate_2d(args: TwoDArgs):
 
     else:
         raise Exception('unknown controller requested')
+
+    builder.Connect(
+        station.GetOutputPort('iiwa_generalized_contact_forces'),
+        force_sensor.GetInputPort("iiwa_inner_forces_in"),
+    )
+    builder.Connect(
+        station.GetOutputPort('iiwa_state'),
+        force_sensor.GetInputPort("iiwa_state_measured"),
+    )
+    builder.Connect(
+        station.GetOutputPort('body_poses'),
+        force_sensor.GetInputPort('body_poses')
+    )
 
     builder.Connect(
         station.GetOutputPort("iiwa_state"),
@@ -807,18 +821,17 @@ def simulate_2d(args: TwoDArgs):
                                                                                                  [ts[2], ts[3]]]))
         diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[1], ts[2]]]))
 
-        state_monitor = StateMonitor(args.log_destination, plant, diagram)
-        simulator.set_monitor(state_monitor.callback)
+    state_monitor = StateMonitor(args.log_destination, plant, diagram,
+                                 trajectory if 'stiffness' == args.select_controller else None,
+                                 cart_trajectory if 'hybrid' == args.select_controller else None,
+                                 meshcat)
+    simulator.set_monitor(state_monitor.callback)
 
     # minimalist_traj_vis(trajectory)
-
     #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
     #meshcat.SetTransform("start", X_Wpstart)
-
     #meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
     #meshcat.SetTransform("end", X_Wpend)
-
-    AddMeshcatTriad(meshcat, 'shelf_frame', X_PT=Xs_WG)
 
     if args.use_traj_vis:
         rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)

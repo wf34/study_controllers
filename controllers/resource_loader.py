@@ -76,7 +76,7 @@ class Scenario:
     )
 
     plant_config: MultibodyPlantConfig = MultibodyPlantConfig(
-        discrete_contact_approximation="sap"
+        discrete_contact_approximation="tamsi"
     )
 
     directives: typing.List[ModelDirective] = dc.field(default_factory=list)
@@ -101,7 +101,7 @@ class Scenario:
 
     camera_ids: typing.Mapping[str, str] = dc.field(default_factory=dict)
 
-    visualization: VisualizationConfig = VisualizationConfig()
+    visualization: VisualizationConfig = VisualizationConfig(publish_contacts=False)
 
 # TODO(russt): load from url (using packagemap).
 def LoadScenario(
