@@ -32,13 +32,14 @@ directives:
     X_PC:
         translation: [.75, 0, -0.7645]
 - add_model:
-    name: shelf
-    file: package://controllers/nondescript_shelf.sdf
+    name: post
+    file: package://controllers/nondescript_post.sdf
 - add_weld:
     parent: valve_table::link
-    child: shelf::shelf_body
+    child: post::post_body
     X_PC:
         translation: [-0.2, 0, 1.0]
-        rotation: !Rpy { deg: [0, 90, 0]}
+        rotation: !Rpy { deg: [0, -90, 0]}
+
 #model_drivers:
 #    wsg: !SchunkWsgDriver {}
