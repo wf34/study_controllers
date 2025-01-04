@@ -8,15 +8,7 @@ directives:
 - add_model:
     name: wsg
     file: package://controllers/schunk_wsg_50_with_tip.sdf
-- add_model:
-    name: shelf
-    file: package://controllers/nondescript_shelf.sdf
-- add_weld:
-    parent: world
-    child: shelf::shelf_body
-    X_PC:
-        translation: [0.65, 0, 0.6]
-        rotation: !Rpy { deg: [0, -45, 0]}
+
 - add_weld:
     parent: iiwa::iiwa_link_7
     child: wsg::body
@@ -31,5 +23,22 @@ directives:
     child: robot_table::link
     X_PC:
         translation: [0, 0, -0.7645]
+- add_model:
+    name: valve_table
+    file: package://controllers/extra_heavy_duty_table_surface_only_collision.sdf
+- add_weld:
+    parent: world
+    child: valve_table::link
+    X_PC:
+        translation: [.75, 0, -0.7645]
+- add_model:
+    name: shelf
+    file: package://controllers/nondescript_shelf.sdf
+- add_weld:
+    parent: valve_table::link
+    child: shelf::shelf_body
+    X_PC:
+        translation: [-0.2, 0, 1.0]
+        rotation: !Rpy { deg: [0, 90, 0]}
 #model_drivers:
 #    wsg: !SchunkWsgDriver {}
