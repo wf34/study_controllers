@@ -22,7 +22,8 @@ def get_current_positions(plant, plant_context):
     q_[:3] = q
     return q_
 
-def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_context) -> Optional[Tuple[PiecewisePolynomial, np.array]]:
+
+def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_context) -> Tuple[Optional[PiecewisePolynomial], Optional[np.array]]:
     '''
     desc
 
@@ -40,7 +41,6 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
     print('dofs:', plant.num_actuated_dofs())
     print('num_model_instances:', plant.num_model_instances())
     print('num_joints:', plant.num_joints())
-    print(num_q)
 
     joint_indices = [
             plant.GetJointByName(j).position_start()
@@ -54,6 +54,9 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         q_variables = ik.q()
         print(q_variables, q_nominal)
         prog = ik.prog()
+
+        if kid == 1:
+            break
 
         if 0 == kid:
             prog.SetInitialGuess(q_variables, q_nominal)
@@ -101,6 +104,13 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         valid_timestamps = [0., 2., 12., 14.]
         q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
         return q_trajectory, valid_timestamps
+    else:
+        q_keyframes = [q_nominal] + q_keyframes
+        q_keyframes = np.array(q_keyframes)
+        valid_timestamps = [0., 2.]
+        print('//--', len(q_keyframes), len(keyframes))
+        qq_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
+        return qq_trajectory, valid_timestamps
 
 
 def make_cartesian_trajectory(keyframes: List[RigidTransform], timestamps: List[float]) -> PiecewisePose:

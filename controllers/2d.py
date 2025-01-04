@@ -44,6 +44,7 @@ from pydrake.all import (
     SchunkWsgPositionController,
     WeldJoint,
     RigidTransform,
+    RotationMatrix,
     SharedPointerSystem,
     ParseIiwaControlMode,
     SimIiwaDriver,
@@ -60,6 +61,7 @@ TIME_STEP=0.001  # faster
 INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., -np.pi / 2.])
 SHELF_LENGTH = .5
 SHELF_THICKNESS = .075
+VALVE_INITIAL_ANGLE = np.radians(135.)
 
 def minimalist_traj_vis(traj):
     step = 1. / 33
@@ -79,13 +81,10 @@ def rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat):
     for ts in np.arange(0, end_time, step):
         global_context.SetTime(ts)
         if trajectory is not None:
-            x = trajectory.value(ts)
-            q_ = np.zeros((plant.num_positions(),1))
-            q_[:3, :] = x
-            plant.SetPositions(plant_context, q_)
+            plant.SetPositions(plant_context, plant.GetModelInstanceByName("iiwa"), trajectory.value(ts))
         if ts == 0:
             print('but in vis:', plant.GetPositions(plant_context))
-        #Xeecurrent_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
+
         visualizer.ForcedPublish(visualizer_context)
 
     visualizer.StopRecording()
@@ -791,23 +790,31 @@ def simulate_2d(args: TwoDArgs):
         plant.GetModelInstanceByName("iiwa"),
         INITIAL_IIWA_COORDS,
     )
+    plant.SetPositions(
+        plant_context,
+        plant.GetModelInstanceByName("post"),
+        [VALVE_INITIAL_ANGLE],
+    )
+
     q_start_iiwa = plant.GetPositions(plant_context, plant.GetModelInstanceByName("iiwa"))
-    print('q_start_iiwa', q_start_iiwa)
 
-    Xee_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
-    Xs_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('shelf_body'))
+    X_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
+    X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('valve_body'))
+    R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ X_WVstart.rotation()
 
-    dominant_axis = np.array([1., 0., 0.])
-    minor_axis = np.array([0., 0., 1.])
-    dominant_axis_W = Xs_WG.rotation().multiply(dominant_axis)
-    minor_axis_W = Xs_WG.rotation().multiply(minor_axis)
-    dominant_axis_W *= SHELF_LENGTH / 2.
-    minor_axis_W *= SHELF_THICKNESS / 2
+    R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([90, 0, 90]))).inverse()
+    R_WGripperAtTurnStart = X_WVstart.rotation() @ R_GoalGripper
+    R_WGripperAtTurnEnd = R_WVend_ @ R_GoalGripper
 
-    X_Wpstart = RigidTransform(Xs_WG.translation() - dominant_axis_W + minor_axis_W)
-    X_Wpend = RigidTransform(Xs_WG.translation() + dominant_axis_W + minor_axis_W)
+    X_WGstart = RigidTransform(R_WGripperAtTurnStart, X_WVstart.translation())
+    X_WGend = RigidTransform(R_WGripperAtTurnEnd, X_WVstart.translation())
 
-    trajectory_and_ts = optimize_target_trajectory([Xee_WG, X_Wpstart, X_Wpend, Xee_WG], plant, plant_context)
+    # AddMeshcatTriad(meshcat, 'initial-gripper', X_PT=X_WG)
+    AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGstart)
+    # AddMeshcatTriad(meshcat, 'initial-valve', X_PT=X_WVstart)
+    # AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGend)
+
+    trajectory_and_ts = optimize_target_trajectory([X_WG, X_WGstart, X_WGend, X_WG], plant, plant_context)
     if trajectory_and_ts is None:
         print('opt didnt succeed')
         return
@@ -843,9 +850,10 @@ def simulate_2d(args: TwoDArgs):
                                      meshcat)
         simulator.set_monitor(state_monitor.callback)
 
-        q_ = np.zeros((plant.num_positions(),1))
+        q_ = np.zeros((plant.num_positions(), 1))
         q_[:3, :] = trajectory.value(0)
         plant.SetPositions(plant_context, q_)
+
         simulator.Initialize()
         meshcat.StartRecording(set_visualizations_while_recording=False)
         simulator.AdvanceTo(trajectory.end_time())

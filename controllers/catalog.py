@@ -73,7 +73,7 @@ class ForceSensor(LeafSystem):
         self.DeclareAbstractInputPort(
             "body_poses", AbstractValue.Make([RigidTransform()])
         )
-        self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
+        self._shelf_body_instance = plant.GetBodyByName("valve_body").index()
 
         self._G = plant.GetBodyByName("body").body_frame()
         self._W = plant.world_frame()
@@ -230,7 +230,7 @@ class HybridCartesianController(LeafSystem):
         self._G = end_effector.body_frame()
         self._W = plant.world_frame()
 
-        self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
+        self._shelf_body_instance = plant.GetBodyByName("valve_body").index()
         self._ee_body_instance = end_effector.index()
 
         self._joint_indices = [
