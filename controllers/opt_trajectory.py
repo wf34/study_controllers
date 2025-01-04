@@ -92,7 +92,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         if not result.is_success():
             print(f'no sol for i={kid}')
             print(result.GetInfeasibleConstraintNames(prog))
-            break
+            return None, None
         else:
             q_keyframes.append(result.GetSolution(q_variables))
 

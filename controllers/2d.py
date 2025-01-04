@@ -69,18 +69,25 @@ def minimalist_traj_vis(traj):
 
 
 def rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat):
+    step = 1. / 33
+    end_time = step if trajectory is None else trajectory.end_time()
+
     plant_context = plant.GetMyContextFromRoot(global_context)
     visualizer_context = visualizer.GetMyContextFromRoot(global_context)
     visualizer.StartRecording(False)
-    step = 1. / 33
-    for ts in np.arange(0, trajectory.end_time(), step):
+
+    for ts in np.arange(0, end_time, step):
         global_context.SetTime(ts)
-        x = trajectory.value(ts)
-        q_ = np.zeros((plant.num_positions(),1))
-        q_[:3, :] = x
-        plant.SetPositions(plant_context, q_)
-        Xeecurrent_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
+        if trajectory is not None:
+            x = trajectory.value(ts)
+            q_ = np.zeros((plant.num_positions(),1))
+            q_[:3, :] = x
+            plant.SetPositions(plant_context, q_)
+        if ts == 0:
+            print('but in vis:', plant.GetPositions(plant_context))
+        #Xeecurrent_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
         visualizer.ForcedPublish(visualizer_context)
+
     visualizer.StopRecording()
     visualizer.PublishRecording()
 
@@ -809,23 +816,17 @@ def simulate_2d(args: TwoDArgs):
 
     diagram.GetInputPort('inner_trajectory').FixValue(global_context, trajectory)
 
-    if 'stiffness' == args.select_controller:
+    if 'stiffness' == args.select_controller and not args.use_traj_vis:
         diagram.GetInputPort('torque_adder_2nd_term').FixValue(global_context, np.zeros((3),))
         diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[-1]]]))
 
-    elif 'hybrid' == args.select_controller:
+    elif 'hybrid' == args.select_controller and not args.use_traj_vis:
         cart_trajectory = make_cartesian_trajectory([X_Wpstart, X_Wpend], [ts[1], ts[2]])
         diagram.GetInputPort('cartesian_trajectory').FixValue(global_context, cart_trajectory)
 
         diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[1]],
                                                                                                  [ts[2], ts[3]]]))
         diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[1], ts[2]]]))
-
-    state_monitor = StateMonitor(args.log_destination, plant, diagram,
-                                 trajectory if 'stiffness' == args.select_controller else None,
-                                 cart_trajectory if 'hybrid' == args.select_controller else None,
-                                 meshcat)
-    simulator.set_monitor(state_monitor.callback)
 
     # minimalist_traj_vis(trajectory)
     #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
@@ -836,6 +837,12 @@ def simulate_2d(args: TwoDArgs):
     if args.use_traj_vis:
         rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)
     else:
+        state_monitor = StateMonitor(args.log_destination, plant, diagram,
+                                     trajectory if 'stiffness' == args.select_controller else None,
+                                     cart_trajectory if 'hybrid' == args.select_controller else None,
+                                     meshcat)
+        simulator.set_monitor(state_monitor.callback)
+
         q_ = np.zeros((plant.num_positions(),1))
         q_[:3, :] = trajectory.value(0)
         plant.SetPositions(plant_context, q_)
