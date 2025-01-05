@@ -92,10 +92,21 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
             break
         else:
             q_keyframes.append(result.GetSolution(q_variables))
+            if kid in (2,3):
+                q_keyframes.append(q_keyframes[-1])
 
-    if len(q_keyframes) == len(keyframes):
+    print('q_keyframes, keyframes:', len(q_keyframes), len(keyframes))
+    if len(q_keyframes) - 2 == len(keyframes):
         q_keyframes = np.array(q_keyframes)
-        valid_timestamps = [0., 2., 4., 14., 16., 18]
+        valid_timestamps = [0., 2., 4., 6., 16., 18., 20., 22.]
+                            # 0, start pose
+                                # 1, reach pre grasp pose
+                                    # 2, reach grasp pose
+                                        # 3, reach closed grip
+                                            # 4, completed turn
+                                                 # 5, reach open grip
+                                                      # 6, reach post grasp
+                                                           # 7, reach start pose
         q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
         return q_trajectory, valid_timestamps
     else:
@@ -106,3 +117,15 @@ def make_cartesian_trajectory(keyframes: List[RigidTransform], timestamps: List[
     if len(keyframes) != len(timestamps):
         raise Exception('bad input')
     return PiecewisePose.MakeLinear(timestamps, keyframes)
+
+
+def make_wsg_trajectory(timestamps: List[float]):
+    assert 8 == len(timestamps)
+    wsg_keyframes = np.array([0.075, 0.075, 0.075, 0., 0., 0.075, 0.075, 0.075]).reshape(1, 8)
+    #                         0      1      2      3   4   5      6      7
+    return PiecewisePolynomial.FirstOrderHold(timestamps, wsg_keyframes)
+
+def make_dummy_wsg_trajectory():
+    ts = [0, 1]
+    wsg_keyframes = np.array([0.075, 0.075]).reshape(1, 2)
+    return PiecewisePolynomial.FirstOrderHold(ts, wsg_keyframes)
