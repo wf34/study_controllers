@@ -52,11 +52,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
     for kid, keyframe in enumerate(keyframes):
         ik = InverseKinematics(plant)
         q_variables = ik.q()
-        print(q_variables, q_nominal)
         prog = ik.prog()
-
-        if kid == 1:
-            break
 
         if 0 == kid:
             prog.SetInitialGuess(q_variables, q_nominal)
@@ -65,15 +61,13 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
             
         prog.AddCost(np.square(np.dot(q_variables, q_nominal)))
 
-        offset = np.array([1e-2, 1e-2, 1e-2])
-
-        if kid == 2:
-            offset = np.array([0.025, 0.02, 0.025])
+        #offset = np.array([1e-2, 1e-2, 1e-2])
+        offset = np.array([0.005, 0.05, 0.005])
 
         offset_upper = keyframe.translation() + offset
         offset_lower = keyframe.translation() - offset
 
-        pos = np.zeros(3,) if kid in (0, len(keyframes) - 1) else [0., 0.11, 0.]
+        pos = np.zeros((3,))
 
         ik.AddPositionConstraint(
             frameA=plant.world_frame(),
@@ -82,35 +76,30 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
             p_AQ_lower=offset_lower,
             p_AQ_upper=offset_upper)
 
-        if kid not in (0, len(keyframes) - 1):
+        if kid in (1, 2, 3, 4):
             ik.AddOrientationConstraint(
                     frameAbar=plant.GetFrameByName("body"),
-                    R_AbarA=RotationMatrix(),
+                    R_AbarA=RotationMatrix.Identity(),
                     frameBbar=plant.world_frame(),
-                    R_BbarB=RotationMatrix(RollPitchYaw(-np.pi /2., -np.pi / 4, 0.)),
-                    theta_bound=np.radians(5.)
+                    R_BbarB=keyframe.rotation(),
+                    theta_bound=np.radians(0.5)
                 )
 
         result = Solve(prog)
         if not result.is_success():
             print(f'no sol for i={kid}')
             print(result.GetInfeasibleConstraintNames(prog))
-            return None, None
+            break
         else:
             q_keyframes.append(result.GetSolution(q_variables))
 
     if len(q_keyframes) == len(keyframes):
         q_keyframes = np.array(q_keyframes)
-        valid_timestamps = [0., 2., 12., 14.]
+        valid_timestamps = [0., 2., 4., 14., 16., 18]
         q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
         return q_trajectory, valid_timestamps
     else:
-        q_keyframes = [q_nominal] + q_keyframes
-        q_keyframes = np.array(q_keyframes)
-        valid_timestamps = [0., 2.]
-        print('//--', len(q_keyframes), len(keyframes))
-        qq_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
-        return qq_trajectory, valid_timestamps
+        return None, None
 
 
 def make_cartesian_trajectory(keyframes: List[RigidTransform], timestamps: List[float]) -> PiecewisePose:

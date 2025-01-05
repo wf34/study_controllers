@@ -195,7 +195,7 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         forces = MultibodyForces(plant=self._plant)
         self._plant.CalcForceElementsContribution(self._plant_context, forces) # gravity and forces aplied to model
         # 0 = dynamics(tau, state) ; a = (f, state) a = F / m; F = ma
-        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(5,), forces)
+        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(6,), forces)
         #print('CalcTorqueOutput', self._plant.num_positions(), bias)
 
         tau -= bias
@@ -290,7 +290,7 @@ class HybridCartesianController(LeafSystem):
         inner_gravity = self._plant.CalcGravityGeneralizedForces(self._plant_context)
         np.copyto(forces.mutable_generalized_forces(), inner_gravity)
 
-        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(5,), forces)
+        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(6,), forces)
         tau -= bias
         tau = tau[:3]
 

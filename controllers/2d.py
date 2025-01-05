@@ -87,6 +87,9 @@ def rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat):
 
         visualizer.ForcedPublish(visualizer_context)
 
+    X_WGcurrent = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
+    AddMeshcatTriad(meshcat, 'gripper-at-the-end', X_PT=X_WGcurrent)
+
     visualizer.StopRecording()
     visualizer.PublishRecording()
 
@@ -281,6 +284,7 @@ def MakeMultibodyPlant(
     Returns:
         A MultibodyPlant populated from (a subset of) the scenario.
     """
+    print('MakeMultibodyPlant was called')
     plant = MultibodyPlant(time_step=scenario.plant_config.time_step)
     parser = Parser(plant)
     _PopulatePlantOrDiagram(
@@ -796,25 +800,34 @@ def simulate_2d(args: TwoDArgs):
         [VALVE_INITIAL_ANGLE],
     )
 
-    q_start_iiwa = plant.GetPositions(plant_context, plant.GetModelInstanceByName("iiwa"))
-
     X_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
     X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('valve_body'))
     R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ X_WVstart.rotation()
+    X_WVend = RigidTransform(R_WVend_, X_WVstart.translation())
 
     R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([90, 0, 90]))).inverse()
-    R_WGripperAtTurnStart = X_WVstart.rotation() @ R_GoalGripper
-    R_WGripperAtTurnEnd = R_WVend_ @ R_GoalGripper
+    t_GoalGripper = [0., -0.075, 0.]
+    t_GoalGripperPreGrasp = [0., -0.275, 0.]
+    X_GoalGripper = RigidTransform(R_GoalGripper, np.zeros((3,)))
+    X_gripper_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripper)
+    X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
 
-    X_WGstart = RigidTransform(R_WGripperAtTurnStart, X_WVstart.translation())
-    X_WGend = RigidTransform(R_WGripperAtTurnEnd, X_WVstart.translation())
+    X_WGripperAtTurnStart_ = X_WVstart @ X_GoalGripper
+    X_WGripperAtTurnEnd_ = X_WVend @ X_GoalGripper
 
-    # AddMeshcatTriad(meshcat, 'initial-gripper', X_PT=X_WG)
-    AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGstart)
-    # AddMeshcatTriad(meshcat, 'initial-valve', X_PT=X_WVstart)
-    # AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGend)
+    X_WGripperAtTurnStart = X_WGripperAtTurnStart_ @ X_gripper_offset
+    X_WGripperAtTurnEnd = X_WGripperAtTurnEnd_ @ X_gripper_offset
 
-    trajectory_and_ts = optimize_target_trajectory([X_WG, X_WGstart, X_WGend, X_WG], plant, plant_context)
+
+    X_WGripperPreGraspAtTurnStart = X_WGripperAtTurnStart_ @ X_pre_grasp_offset
+    X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_pre_grasp_offset
+
+    #AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
+    #AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart)
+    #AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
+
+    trajectory_and_ts = optimize_target_trajectory([X_WG, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart, X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, X_WG],
+                                                   plant, plant_context)
     if trajectory_and_ts is None:
         print('opt didnt succeed')
         return
@@ -828,12 +841,12 @@ def simulate_2d(args: TwoDArgs):
         diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[-1]]]))
 
     elif 'hybrid' == args.select_controller and not args.use_traj_vis:
-        cart_trajectory = make_cartesian_trajectory([X_Wpstart, X_Wpend], [ts[1], ts[2]])
+        cart_trajectory = make_cartesian_trajectory([X_WGripperAtTurnStart, X_WGripperAtTurnEnd], [ts[2], ts[3]])
         diagram.GetInputPort('cartesian_trajectory').FixValue(global_context, cart_trajectory)
 
-        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[1]],
-                                                                                                 [ts[2], ts[3]]]))
-        diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[1], ts[2]]]))
+        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[2]],
+                                                                                                 [ts[3], ts[5]]]))
+        diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[2], ts[3]]]))
 
     # minimalist_traj_vis(trajectory)
     #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
@@ -850,9 +863,7 @@ def simulate_2d(args: TwoDArgs):
                                      meshcat)
         simulator.set_monitor(state_monitor.callback)
 
-        q_ = np.zeros((plant.num_positions(), 1))
-        q_[:3, :] = trajectory.value(0)
-        plant.SetPositions(plant_context, q_)
+        plant.SetPositions(plant_context, plant.GetModelInstanceByName("iiwa"), trajectory.value(0))
 
         simulator.Initialize()
         meshcat.StartRecording(set_visualizations_while_recording=False)

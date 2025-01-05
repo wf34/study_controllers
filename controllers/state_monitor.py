@@ -42,7 +42,7 @@ class StateMonitor:
         self._iiwa = plant.GetModelInstanceByName("iiwa")
         gripper = plant.GetBodyByName("body")
         self._gripper_body_instance = gripper.index()
-        self._shelf_body_instance = plant.GetBodyByName("shelf_body").index()
+        self._shelf_body_instance = plant.GetBodyByName("valve_body").index()
         self._diagram = diagram
 
         self._station = diagram.GetSubsystemByName("station")
