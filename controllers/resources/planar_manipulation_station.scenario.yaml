@@ -40,6 +40,5 @@ directives:
     X_PC:
         translation: [-0.2, 0.08, 1.0]
         rotation: !Rpy { deg: [0, -90, 0]}
-
-#model_drivers:
-#    wsg: !SchunkWsgDriver {}
+model_drivers:
+    wsg: !SchunkWsgDriver {}
