@@ -34,6 +34,7 @@ class Datum(BaseModel):
     time: float
     pe_s: Vector2
     f_s: Vector2
+    moment: float
 
 
 class StateMonitor:
@@ -50,7 +51,6 @@ class StateMonitor:
         self.torque_trajectory = ttrajectory
         self.cart_trajectory = ctrajectory
         self._meshcat = meshcat
-        self.X_Wshelf = None
         
         if os.path.exists(path):
             assert not os.path.isdir(path)
@@ -89,10 +89,6 @@ class StateMonitor:
         if 2. <= current_time and current_time < 12.:
             station_context = self._station.GetMyContextFromRoot(root_context)
             poses = self._station.GetOutputPort('body_poses').Eval(station_context)
-            if self.X_Wshelf is None:
-                self.X_Wshelf = poses[self._shelf_body_instance]
-
-            R_shelfW = get_rot2d_from_transform( self.X_Wshelf )  # because 3D->2D, XZ->XY
 
             pose_desired = self.get_goal_pose(root_context)
             plant_context = self._plant.GetMyContextFromRoot(root_context)
@@ -101,19 +97,17 @@ class StateMonitor:
 
             pd_WG = get_transl2d_from_transform(pose_desired)
             pm_WG = get_transl2d_from_transform(pose_measured)
-
-            pd_WS = R_shelfW @ pd_WG
-            pm_WS = R_shelfW @ pm_WG
-
-            pe_S = pd_WS - pm_WS
+            pe_W = pd_WG - pm_WG
 
             force_sensor_system = self._diagram.GetSubsystemByName('ForceSensor')
             sensor_context = force_sensor_system.GetMyContextFromRoot(root_context)
-            sensed_reaction_force = force_sensor_system.GetOutputPort('sensed_force_out').Eval(sensor_context)[1:]
+            sensed_reaction_force = force_sensor_system.GetOutputPort('sensed_force_out').Eval(sensor_context)
+            sensed_reaction_forces = sensed_reaction_force[1:]
 
             datum = Datum(time=root_context.get_time(),
-                          pe_s=Vector2.instantiate_from_arr(pe_S),
-                          f_s=Vector2.instantiate_from_arr(sensed_reaction_force))
+                          pe_s=Vector2.instantiate_from_arr(pe_W),
+                          f_s=Vector2.instantiate_from_arr(sensed_reaction_force),
+                          moment=sensed_reaction_force[0])
 
             if self._file:
                 self._file.write(datum.model_dump_json(exclude_none=True))

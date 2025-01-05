@@ -76,7 +76,8 @@ class Scenario:
     )
 
     plant_config: MultibodyPlantConfig = MultibodyPlantConfig(
-        discrete_contact_approximation="tamsi"
+        discrete_contact_approximation="tamsi",
+        time_step=1e-3,
     )
 
     directives: typing.List[ModelDirective] = dc.field(default_factory=list)

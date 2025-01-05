@@ -12,7 +12,7 @@ from state_monitor import Datum
 class PlotterArgs(Tap):
     input_files: typing.List[str]
     labels: typing.List[str] = []
-    plot_what: typing.Literal['pe', 'f']
+    plot_what: typing.Literal['pe', 'f', 'm']
 
     def process_args(self):
         if len(list(map(os.path.isfile, self.input_files))) != len(self.input_files):
@@ -50,6 +50,7 @@ def plot(args: PlotterArgs):
         t = []
         pe_x = []
         pe_z = []
+        m = []
 
         for d in datums:
             t.append(d.time)
@@ -59,6 +60,9 @@ def plot(args: PlotterArgs):
             elif args.plot_what == 'f':
                 pe_x.append(d.f_s.x)
                 pe_z.append(d.f_s.z)
+            elif args.plot_what == 'm':
+                pe_x.append(d.moment)
+                pe_z.append(0)
 
         ax[0].plot(t, pe_x, linewidth=w, label=label_ + f'/{label_prefix}_x')
         ax[1].plot(t, pe_z, linewidth=w, label=label_ + f'/{label_prefix}_z')
