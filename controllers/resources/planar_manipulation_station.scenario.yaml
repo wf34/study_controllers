@@ -38,7 +38,7 @@ directives:
     parent: valve_table::link
     child: post::post_body
     X_PC:
-        translation: [-0.2, 0.04, 1.0]
+        translation: [-0.2, 0.08, 1.0]
         rotation: !Rpy { deg: [0, -90, 0]}
 
 #model_drivers:
