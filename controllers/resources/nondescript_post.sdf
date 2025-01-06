@@ -69,9 +69,10 @@
     <frame name="Cr" attached_to="post_body">
       <pose relative_to="post_body">0 0 0 0 0 0</pose>
     </frame>
-    <joint name="valve_to_post_joint" type="revolute">
+    <joint name="valve_to_post_joint" type="screw">
       <parent>Cr</parent>
       <child>valve_body</child>
+      <screw_thread_pitch>0.001</screw_thread_pitch>
       <axis>
         <xyz>0 1 0</xyz>
         <dynamics>
