@@ -62,7 +62,7 @@ def plot(args: PlotterArgs):
                 pe_z.append(d.f_s.z)
             elif args.plot_what == 'm':
                 pe_x.append(d.moment)
-                pe_z.append(0)
+                pe_z.append(d.pitch_angle)
 
         ax[0].plot(t, pe_x, linewidth=w, label=label_ + f'/{label_prefix}_x')
         ax[1].plot(t, pe_z, linewidth=w, label=label_ + f'/{label_prefix}_z')

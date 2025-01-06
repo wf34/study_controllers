@@ -10,6 +10,7 @@ from pydrake.multibody.math import SpatialForce
 
 from pydrake.all import (
     RigidTransform,
+    RollPitchYaw,
 )
 
 import numpy as np
@@ -35,6 +36,7 @@ class Datum(BaseModel):
     pe_s: Vector2
     f_s: Vector2
     moment: float
+    pitch_angle: float
 
 
 class StateMonitor:
@@ -43,7 +45,7 @@ class StateMonitor:
         self._iiwa = plant.GetModelInstanceByName("iiwa")
         gripper = plant.GetBodyByName("body")
         self._gripper_body_instance = gripper.index()
-        self._shelf_body_instance = plant.GetBodyByName("valve_body").index()
+        self._valve_body_instance = plant.GetBodyByName("valve_body").index()
         self._diagram = diagram
 
         self._station = diagram.GetSubsystemByName("station")
@@ -86,9 +88,11 @@ class StateMonitor:
 
     def callback(self, root_context):
         current_time = root_context.get_time()
-        if 2. <= current_time and current_time < 12.:
+        if 6. <= current_time and current_time < 16.:
             station_context = self._station.GetMyContextFromRoot(root_context)
             poses = self._station.GetOutputPort('body_poses').Eval(station_context)
+            X_WV = poses[self._valve_body_instance]
+            valve_pitch_angle = RollPitchYaw(X_WV.rotation()).pitch_angle()
 
             pose_desired = self.get_goal_pose(root_context)
             plant_context = self._plant.GetMyContextFromRoot(root_context)
@@ -107,7 +111,8 @@ class StateMonitor:
             datum = Datum(time=root_context.get_time(),
                           pe_s=Vector2.instantiate_from_arr(pe_W),
                           f_s=Vector2.instantiate_from_arr(sensed_reaction_force),
-                          moment=sensed_reaction_force[0])
+                          moment=sensed_reaction_force[0],
+                          pitch_angle=valve_pitch_angle)
 
             if self._file:
                 self._file.write(datum.model_dump_json(exclude_none=True))
