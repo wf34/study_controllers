@@ -43,7 +43,7 @@
       <pose relative_to="body"/>
     </frame>
     <link name="left_finger">
-      <pose>-0.0420 0.028 0 0 3.141592 0</pose>
+      <pose>-0.0115 0.028 0 0 3.141592 0</pose>
       <inertial>
         <mass>0.05</mass>
         <inertia>
@@ -94,7 +94,7 @@
       </collision>
     </link>
     <link name="right_finger">
-      <pose>0.0420 0.028 0 0 0 0</pose>
+      <pose>0.0115 0.028 0 0 0 0</pose>
       <inertial>
         <mass>0.05</mass>
         <inertia>
@@ -154,7 +154,7 @@
           <lower>-0.055</lower>
           <upper>0</upper>
           <effort>80</effort>
-          <stiffness>1500000</stiffness>
+          <stiffness>15000</stiffness>
         </limit>
         <dynamics>
           <spring_reference>0</spring_reference>
@@ -174,7 +174,7 @@
           <lower>0</lower>
           <upper>0.055</upper>
           <effort>80</effort>
-          <stiffness>1500000</stiffness>
+          <stiffness>15000</stiffness>
         </limit>
         <dynamics>
           <spring_reference>0</spring_reference>
