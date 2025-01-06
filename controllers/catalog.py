@@ -327,7 +327,7 @@ class HybridCartesianController(LeafSystem):
 
         # force control
         m_measured = self.GetInputPort('ee_force_measured').Eval(context)[0]
-        m_goal = -15.
+        m_goal = 2.
         me = m_goal - m_measured
         # print('me', me)
 

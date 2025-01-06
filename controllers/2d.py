@@ -726,7 +726,7 @@ def simulate_2d(args: TwoDArgs):
     if 'stiffness' == args.select_controller:
         builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
     elif 'hybrid' == args.select_controller:
-        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 10.e-3, 2.e-3, 1.e-6, 1.e-6))
+        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 0.2, 10.))
         builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
         builder.ExportInput(hyb_controller.GetInputPort('trajectory'), 'cartesian_trajectory')
 
@@ -830,7 +830,7 @@ def simulate_2d(args: TwoDArgs):
     #AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
 
     trajectory, ts = optimize_target_trajectory([X_WG, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart, X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, X_WG],
-                                                   plant, plant_context)
+                                                plant, plant_context)
     if trajectory is None and not arg.use_traj_vis:
         print('opt didnt succeed')
         return
@@ -845,12 +845,12 @@ def simulate_2d(args: TwoDArgs):
         diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[-1]]]))
 
     elif 'hybrid' == args.select_controller and not args.use_traj_vis:
-        cart_trajectory = make_cartesian_trajectory([X_WGripperAtTurnStart, X_WGripperAtTurnEnd], [ts[2], ts[3]])
+        cart_trajectory = make_cartesian_trajectory([X_WGripperAtTurnStart, X_WGripperAtTurnEnd], [ts[3], ts[4]])
         diagram.GetInputPort('cartesian_trajectory').FixValue(global_context, cart_trajectory)
 
-        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[2]],
-                                                                                                 [ts[3], ts[5]]]))
-        diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[2], ts[3]]]))
+        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[3]],
+                                                                                                 [ts[4], ts[-1]]]))
+        diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[3], ts[4]]]))
 
     # minimalist_traj_vis(trajectory)
     #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))

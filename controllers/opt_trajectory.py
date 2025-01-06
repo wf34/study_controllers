@@ -121,11 +121,21 @@ def make_cartesian_trajectory(keyframes: List[RigidTransform], timestamps: List[
 
 def make_wsg_trajectory(timestamps: List[float]):
     assert 8 == len(timestamps)
-    wsg_keyframes = np.array([0.075, 0.075, 0.075, 0., 0., 0.075, 0.075, 0.075]).reshape(1, 8)
-    #                         0      1      2      3   4   5      6      7
-    return PiecewisePolynomial.FirstOrderHold(timestamps, wsg_keyframes)
+    opened = np.array([0.107])
+    closed = np.array([0.0])
+    traj_wsg_command = PiecewisePolynomial.FirstOrderHold(
+        timestamps[:2],
+        np.hstack([[opened], [opened]]),
+    )
+
+    wsg_keyframes = [opened, opened, opened, closed, closed, opened, opened, opened]
+    #                0       1       2       3       4       5       6       7
+    for ts, wsg_position in zip(timestamps[2:], wsg_keyframes[2:]):
+        traj_wsg_command.AppendFirstOrderSegment(ts, wsg_position)
+
+    return traj_wsg_command
 
 def make_dummy_wsg_trajectory():
     ts = [0, 1]
-    wsg_keyframes = np.array([0.075, 0.075]).reshape(1, 2)
+    wsg_keyframes = np.array([0.107, 0.107]).reshape(1, 2)
     return PiecewisePolynomial.FirstOrderHold(ts, wsg_keyframes)
