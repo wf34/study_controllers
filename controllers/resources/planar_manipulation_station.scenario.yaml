@@ -30,7 +30,7 @@ directives:
     parent: world
     child: valve_table::link
     X_PC:
-        translation: [.75, 0, -0.7645]
+        translation: [.75, 0.210375, -0.7645]
 - add_model:
     name: post
     file: package://controllers/nondescript_post.sdf
@@ -40,5 +40,14 @@ directives:
     X_PC:
         translation: [-0.2, 0.08, 1.0]
         rotation: !Rpy { deg: [0, -90, 0]}
+- add_model:
+    name: bolt_and_nut
+    file: package://controllers/bolt_and_nut.sdf
+- add_weld:
+    parent: valve_table::link
+    child: bolt_and_nut::bolt
+    X_PC:
+        translation: [-0.2, -0.2, 1.206]
+        rotation: !Rpy { deg: [0, -90, 90]}
 model_drivers:
     wsg: !SchunkWsgDriver {}

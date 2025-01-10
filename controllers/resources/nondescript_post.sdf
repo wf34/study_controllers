@@ -32,53 +32,5 @@
         </inertia>
       </inertial>
     </link>
-    <link name="valve_body">
-      <pose relative_to="post_body">0.206 -0.07 0 0 0 0</pose>
-      <visual name="valve_body_vis">
-        <pose>0.0 0.0 0.0 0.0 0.0 0.0</pose>
-        <geometry>
-          <box>
-            <size>0.06 0.06 0.06</size>
-          </box>
-        </geometry>
-        <material>
-          <diffuse>0.8 0.2 0.2 1</diffuse>
-        </material>
-      </visual>
-      <collision name="valve_body_collision">
-        <pose>0 0 0 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>0.06 0.06 0.06</size>
-          </box>
-        </geometry>
-      </collision>
-      <inertial>
-        <pose>0 0 0 0 0 0</pose>
-        <mass>0.3</mass>
-        <inertia>
-          <ixx>1.1e-2</ixx>
-          <ixy>0</ixy>
-          <ixz>0</ixz>
-          <iyy>1.1e-2</iyy>
-          <iyz>0</iyz>
-          <izz>1.1e-2</izz>
-        </inertia>
-      </inertial>
-    </link>
-    <frame name="Cr" attached_to="post_body">
-      <pose relative_to="post_body">0 0 0 0 0 0</pose>
-    </frame>
-    <joint name="valve_to_post_joint" type="screw">
-      <parent>Cr</parent>
-      <child>valve_body</child>
-      <screw_thread_pitch>0.001</screw_thread_pitch>
-      <axis>
-        <xyz>0 1 0</xyz>
-        <dynamics>
-          <damping>0.5</damping>
-        </dynamics>
-      </axis>
-    </joint>
   </model>
 </sdf>
