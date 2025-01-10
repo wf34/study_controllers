@@ -700,7 +700,7 @@ def Setup(parser):
 
 def simulate_2d(args: TwoDArgs):
     meshcat = StartMeshcat()
-    meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
+    # meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
 
     builder = DiagramBuilder()
 
@@ -798,14 +798,14 @@ def simulate_2d(args: TwoDArgs):
         plant.GetModelInstanceByName("iiwa"),
         INITIAL_IIWA_COORDS,
     )
-    plant.SetPositions(
-        plant_context,
-        plant.GetModelInstanceByName("post"),
-        [VALVE_INITIAL_ANGLE],
-    )
+    #plant.SetPositions(
+    #    plant_context,
+    #    plant.GetModelInstanceByName("bolt_and_nut"),
+    #    [VALVE_INITIAL_ANGLE],
+    #)
 
     X_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
-    X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('valve_body'))
+    X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('nut'))
     R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ X_WVstart.rotation()
     X_WVend = RigidTransform(R_WVend_, X_WVstart.translation())
 
@@ -825,20 +825,21 @@ def simulate_2d(args: TwoDArgs):
     X_WGripperPreGraspAtTurnStart = X_WGripperAtTurnStart_ @ X_pre_grasp_offset
     X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_pre_grasp_offset
 
-    #AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
-    #AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart)
-    #AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
+    AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
+    AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart)
+    AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
 
     trajectory, ts = optimize_target_trajectory([X_WG, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart, X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, X_WG],
                                                 plant, plant_context)
-    if trajectory is None and not arg.use_traj_vis:
+    if trajectory is None and not args.use_traj_vis:
         print('opt didnt succeed')
         return
 
     diagram.GetInputPort('inner_trajectory').FixValue(global_context, trajectory)
 
-    wsg_trajectory = make_wsg_trajectory(ts)
-    wsg_trajectory_source.UpdateTrajectory(wsg_trajectory)
+    if not args.use_traj_vis:
+        wsg_trajectory = make_wsg_trajectory(ts)
+        wsg_trajectory_source.UpdateTrajectory(wsg_trajectory)
 
     if 'stiffness' == args.select_controller and not args.use_traj_vis:
         diagram.GetInputPort('torque_adder_2nd_term').FixValue(global_context, np.zeros((3),))
