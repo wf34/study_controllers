@@ -801,18 +801,12 @@ def simulate_2d(args: TwoDArgs):
     X_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
     X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('nut'))
 
-    AddMeshcatTriad(meshcat, 'NutInitPose', X_PT=X_WVstart)
-
-
-    R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([90, 0, 90]))).inverse()
-    t_GoalGripper = [0.02, -0.075, 0.]
-    t_GoalGripperPreGrasp = [0.02, -0.225, 0.]
-    X_GoalGripper = RigidTransform(R_GoalGripper, [.01]*3)
+    R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([180, 0, 90]))).inverse()
+    t_GoalGripper = [0., -0.075, -0.02]
+    t_GoalGripperPreGrasp = [0., -0.225, -0.02]
+    X_GoalGripper = RigidTransform(R_GoalGripper, np.zeros((3,)))
     X_gripper_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripper)
     X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
-
-    X_WV_G = X_WVstart @ X_GoalGripper
-    AddMeshcatTriad(meshcat, 'NutInitPoseInG', X_PT=X_WV_G)
 
     possible_nut_rotations = []
     for ind, alpha in enumerate(np.radians(np.arange(0, 360, 60))):
