@@ -62,7 +62,6 @@ TIME_STEP=0.001  # faster
 INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., -np.pi / 2.])
 SHELF_LENGTH = .5
 SHELF_THICKNESS = .075
-VALVE_INITIAL_ANGLE = np.radians(135.)
 
 def minimalist_traj_vis(traj):
     step = 1. / 33
@@ -798,26 +797,38 @@ def simulate_2d(args: TwoDArgs):
         plant.GetModelInstanceByName("iiwa"),
         INITIAL_IIWA_COORDS,
     )
-    #plant.SetPositions(
-    #    plant_context,
-    #    plant.GetModelInstanceByName("bolt_and_nut"),
-    #    [VALVE_INITIAL_ANGLE],
-    #)
 
     X_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
     X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('nut'))
-    R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ X_WVstart.rotation()
-    X_WVend = RigidTransform(R_WVend_, X_WVstart.translation())
 
     R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([90, 0, 90]))).inverse()
-    t_GoalGripper = [0., -0.075, 0.]
-    t_GoalGripperPreGrasp = [0., -0.275, 0.]
+    t_GoalGripper = [0.02, -0.075, 0.]
+    t_GoalGripperPreGrasp = [0.02, -0.225, 0.]
     X_GoalGripper = RigidTransform(R_GoalGripper, np.zeros((3,)))
     X_gripper_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripper)
     X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
 
-    X_WGripperAtTurnStart_ = X_WVstart @ X_GoalGripper
-    X_WGripperAtTurnEnd_ = X_WVend @ X_GoalGripper
+    possible_nut_rotations = []
+    for ind, alpha in enumerate(np.radians(np.arange(0, 360, 60))):
+        R_1 = RollPitchYaw([0, alpha, 0]).ToRotationMatrix() @ X_WVstart.rotation()
+        vec = np.degrees(RollPitchYaw(R_1).vector()).tolist()
+        vec_with_ind = [ind, np.round(np.degrees(alpha))] + vec
+        #print("// ind={} angle {} RollPitchYaw: {:.1f} {:.1f} {:.1f}".format(*vec_with_ind))
+        #AddMeshcatTriad(meshcat, f'nut-sides-{alpha:.3f}', X_PT=X_curr_rot, opacity=0.33)
+        possible_nut_rotations.append(R_1)
+
+    arg_min = 0
+    least_ang_distance = float('inf')
+    R_WNutInBetterOrientation = RotationMatrix(RollPitchYaw(np.radians([90., 30., 0.])))
+    for ind, R_WNcand in enumerate(possible_nut_rotations):
+        loss = np.linalg.norm(np.degrees(RollPitchYaw(R_WNcand.InvertAndCompose(R_WNutInBetterOrientation)).vector()))
+        if loss < least_ang_distance:
+            least_ang_distance = loss
+            arg_min = ind
+
+    X_WGripperAtTurnStart_ = RigidTransform(possible_nut_rotations[arg_min], X_WVstart.translation()) @ X_GoalGripper
+    R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ possible_nut_rotations[arg_min]
+    X_WGripperAtTurnEnd_ = RigidTransform(R_WVend_, X_WVstart.translation()) @ X_GoalGripper
 
     X_WGripperAtTurnStart = X_WGripperAtTurnStart_ @ X_gripper_offset
     X_WGripperAtTurnEnd = X_WGripperAtTurnEnd_ @ X_gripper_offset
@@ -828,6 +839,7 @@ def simulate_2d(args: TwoDArgs):
     AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
     AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart)
     AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
+    AddMeshcatTriad(meshcat, 'postgrasp-at-final-valve', X_PT=X_WGripperPostGraspAtTurnEnd)
 
     trajectory, ts = optimize_target_trajectory([X_WG, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart, X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, X_WG],
                                                 plant, plant_context)
