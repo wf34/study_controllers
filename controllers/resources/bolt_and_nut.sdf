@@ -70,10 +70,10 @@
     <joint name='nut_to_bolt_link' type='screw'>
       <parent>bolt</parent>
       <child>nut</child>
-      <screw_thread_pitch>0.03</screw_thread_pitch>
+      <screw_thread_pitch>0.08</screw_thread_pitch>
       <pose>0 0 0 0 0 0</pose>
       <axis>
-        <xyz>0 1 0</xyz>
+        <xyz>0 0 1</xyz>
         <dynamics>
           <damping>0.5</damping>
         </dynamics>

@@ -61,9 +61,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
             
         prog.AddCost(np.square(np.dot(q_variables, q_nominal)))
 
-        #offset = np.array([1e-2, 1e-2, 1e-2])
-        offset = np.array([0.005, 0.05, 0.005])
-
+        offset = np.array([0.01, 0.1, 0.01])
         offset_upper = keyframe.translation() + offset
         offset_lower = keyframe.translation() - offset
 

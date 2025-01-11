@@ -802,14 +802,14 @@ def simulate_2d(args: TwoDArgs):
     X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('nut'))
 
     R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([180, 0, 90]))).inverse()
-    t_GoalGripper = [0., -0.075, -0.02]
+    t_GoalGripper = [0., -0.085, -0.02]
     t_GoalGripperPreGrasp = [0., -0.225, -0.02]
     X_GoalGripper = RigidTransform(R_GoalGripper, np.zeros((3,)))
     X_gripper_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripper)
     X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
 
     possible_nut_rotations = []
-    for ind, alpha in enumerate(np.radians(np.arange(0, 360, 60))):
+    for ind, alpha in enumerate(np.radians(np.arange(30, 360, 60))):
         R_1 = RollPitchYaw([0, alpha, 0]).ToRotationMatrix() @ X_WVstart.rotation()
         vec = np.degrees(RollPitchYaw(R_1).vector()).tolist()
         vec_with_ind = [ind, np.round(np.degrees(alpha))] + vec
@@ -819,13 +819,14 @@ def simulate_2d(args: TwoDArgs):
 
     arg_min = 0
     least_ang_distance = float('inf')
-    R_WNutInBetterOrientation = RotationMatrix(RollPitchYaw(np.radians([90., 30., 0.])))
+    R_WNutInBetterOrientation = RotationMatrix(RollPitchYaw(np.radians([90., 60., 0.])))
     for ind, R_WNcand in enumerate(possible_nut_rotations):
         loss = np.linalg.norm(np.degrees(RollPitchYaw(R_WNcand.InvertAndCompose(R_WNutInBetterOrientation)).vector()))
         if loss < least_ang_distance:
             least_ang_distance = loss
             arg_min = ind
 
+    print('arg_min=', arg_min)
     X_WGripperAtTurnStart_ = RigidTransform(possible_nut_rotations[arg_min], X_WVstart.translation()) @ X_GoalGripper
     R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ possible_nut_rotations[arg_min]
     X_WGripperAtTurnEnd_ = RigidTransform(R_WVend_, X_WVstart.translation()) @ X_GoalGripper

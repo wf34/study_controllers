@@ -38,7 +38,7 @@ directives:
     parent: valve_table::link
     child: post::post_body
     X_PC:
-        translation: [-0.3, 0.08, 1.0]
+        translation: [-0.2, 0.08, 1.0]
         rotation: !Rpy { deg: [0, -90, 0]}
 - add_model:
     name: bolt_and_nut
@@ -47,7 +47,7 @@ directives:
     parent: post::post_body
     child: bolt_and_nut::bolt
     X_PC:
-        translation: [0.205, -0.28, 0.]
+        translation: [0.21, -0.28, 0.]
         rotation: !Rpy { deg: [90, 0, 0]}
 model_drivers:
     wsg: !SchunkWsgDriver {}
