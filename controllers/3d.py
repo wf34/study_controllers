@@ -52,13 +52,11 @@ from pydrake.all import (
 )
 
 from directives_tree import DirectivesTree
-from resource_loader import get_resource_path, LoadScenario, Scenario
+from resource_loader import get_resource_path, LoadScenario, Scenario, TIME_STEP
 from catalog import TrajFollowingJointStiffnessController, HybridCartesianController, ForceSensor
 from opt_trajectory import optimize_target_trajectory, make_cartesian_trajectory, make_wsg_trajectory, make_dummy_wsg_trajectory
 from state_monitor import StateMonitor
 from visualization_tools import AddMeshcatTriad
-
-TIME_STEP=0.001  # faster
 
 def minimalist_traj_vis(traj):
     step = 1. / 33
@@ -696,7 +694,7 @@ def Setup(parser):
 
 def simulate_2d(args: TwoDArgs):
     meshcat = StartMeshcat()
-    meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
+    # meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
 
     builder = DiagramBuilder()
 
@@ -817,7 +815,6 @@ def simulate_2d(args: TwoDArgs):
             least_ang_distance = loss
             arg_min = ind
 
-    print('arg_min=', arg_min)
     X_WGripperAtTurnStart_ = RigidTransform(possible_nut_rotations[arg_min], X_WVstart.translation()) @ X_GoalGripper
     R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ possible_nut_rotations[arg_min]
     X_WGripperAtTurnEnd_ = RigidTransform(R_WVend_, X_WVstart.translation()) @ X_GoalGripper
@@ -872,6 +869,7 @@ def simulate_2d(args: TwoDArgs):
                                      meshcat)
         simulator.set_monitor(state_monitor.callback)
 
+        print('will do a trajectory of {} secs'.format(trajectory.end_time()))
         plant.SetPositions(plant_context, plant.GetModelInstanceByName("iiwa"), trajectory.value(0))
 
         simulator.Initialize()

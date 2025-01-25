@@ -24,6 +24,7 @@ from pydrake.all import (
 
 from pydrake.common.yaml import yaml_load_typed
 
+TIME_STEP=1.e-4  # faster
 
 def get_resource_path(resource_name: str, arg_provides_ext=True) -> str:
     ext = '' if arg_provides_ext else '.sdf'
@@ -77,7 +78,7 @@ class Scenario:
 
     plant_config: MultibodyPlantConfig = MultibodyPlantConfig(
         discrete_contact_approximation="tamsi",
-        time_step=1e-3,
+        time_step=TIME_STEP,
     )
 
     directives: typing.List[ModelDirective] = dc.field(default_factory=list)
