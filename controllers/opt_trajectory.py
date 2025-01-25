@@ -19,7 +19,7 @@ def get_current_positions(plant, plant_context):
         plant_context,
         plant.GetModelInstanceByName("iiwa"),
     )
-    q_[:3] = q
+    q_[:7] = q
     return q_
 
 
@@ -43,9 +43,9 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
     print('num_joints:', plant.num_joints())
 
     joint_indices = [
-            plant.GetJointByName(j).position_start()
-            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
-        ]
+        plant.GetJointByName(j).position_start()
+        for j in map(lambda i: f'iiwa_joint_{i}', range(1, 8))
+    ]
     print('joint_indices:', joint_indices)
 
     q_keyframes = []
@@ -105,7 +105,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
                                                  # 5, reach open grip
                                                       # 6, reach post grasp
                                                            # 7, reach start pose
-        q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :3].T)
+        q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :7].T)
         return q_trajectory, valid_timestamps
     else:
         return None, None

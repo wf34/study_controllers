@@ -59,9 +59,6 @@ from state_monitor import StateMonitor
 from visualization_tools import AddMeshcatTriad
 
 TIME_STEP=0.001  # faster
-INITIAL_IIWA_COORDS = np.array([np.pi / 8., -np.pi / 4., -np.pi / 2.])
-SHELF_LENGTH = .5
-SHELF_THICKNESS = .075
 
 def minimalist_traj_vis(traj):
     step = 1. / 33
@@ -703,7 +700,7 @@ def simulate_2d(args: TwoDArgs):
 
     builder = DiagramBuilder()
 
-    scenario = LoadScenario(filename=get_resource_path('planar_manipulation_station.scenario.yaml', arg_provides_ext=True))
+    scenario = LoadScenario(filename=get_resource_path('manipulation_station.scenario.yaml', arg_provides_ext=True))
     station = builder.AddSystem(MakeHardwareStation(scenario, meshcat, parser_prefinalize_callback=Setup))
 
     plant = station.GetSubsystemByName("plant")
@@ -713,7 +710,7 @@ def simulate_2d(args: TwoDArgs):
     if args.use_traj_vis:
         visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
 
-    adder = builder.AddSystem(Adder(2, 3))
+    adder = builder.AddSystem(Adder(2, 7))
     controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
     builder.ExportInput(controller.GetInputPort('trajectory'), 'inner_trajectory')
     builder.ExportInput(controller.GetInputPort('switched_on_intervals'), 'stiff_c_switched_on_intervals')
@@ -792,12 +789,6 @@ def simulate_2d(args: TwoDArgs):
         global_context = diagram.CreateDefaultContext()
 
     plant_context = plant.GetMyContextFromRoot(global_context)
-    plant.SetPositions(
-        plant_context,
-        plant.GetModelInstanceByName("iiwa"),
-        INITIAL_IIWA_COORDS,
-    )
-
     X_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
     X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('nut'))
 
@@ -855,7 +846,7 @@ def simulate_2d(args: TwoDArgs):
         wsg_trajectory_source.UpdateTrajectory(wsg_trajectory)
 
     if 'stiffness' == args.select_controller and not args.use_traj_vis:
-        diagram.GetInputPort('torque_adder_2nd_term').FixValue(global_context, np.zeros((3),))
+        diagram.GetInputPort('torque_adder_2nd_term').FixValue(global_context, np.zeros((7),))
         diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[-1]]]))
 
     elif 'hybrid' == args.select_controller and not args.use_traj_vis:

@@ -67,8 +67,8 @@ class ForceSensor(LeafSystem):
         self._iiwa = self._plant.GetModelInstanceByName("iiwa")
         self.set_name('ForceSensor')
 
-        self.DeclareVectorInputPort("iiwa_inner_forces_in", BasicVector(3))
-        self.DeclareVectorInputPort("iiwa_state_measured", BasicVector(6))
+        self.DeclareVectorInputPort("iiwa_inner_forces_in", BasicVector(7))
+        self.DeclareVectorInputPort("iiwa_state_measured", BasicVector(14))
 
         self.DeclareAbstractInputPort(
             "body_poses", AbstractValue.Make([RigidTransform()])
@@ -80,7 +80,7 @@ class ForceSensor(LeafSystem):
 
         self._joint_indices = [
             plant.GetJointByName(j).position_start()
-            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
+            for j in map(lambda i: f'iiwa_joint_{i}', range(1, 8))
         ]
 
         #body_instance = plant.GetBodyByName("body")
@@ -97,8 +97,8 @@ class ForceSensor(LeafSystem):
         torques = self.GetInputPort("iiwa_inner_forces_in").Eval(context)
 
         iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
-        q_now = iiwa_state[:3]
-        q_dot_now = iiwa_state[3:]
+        q_now = iiwa_state[:7]
+        q_dot_now = iiwa_state[7:]
 
         self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
         self._plant.SetVelocities(self._plant_context, self._iiwa, q_dot_now)
@@ -125,8 +125,8 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         self._iiwa = plant.GetModelInstanceByName("iiwa")
 
-        self.kp_vec = np.zeros(3,) + kp
-        self.kd_vec = np.zeros(3,) + kd
+        self.kp_vec = np.zeros(7,) + kp
+        self.kd_vec = np.zeros(7,) + kd
 
         #self.ctrl = JointStiffnessController()
 
@@ -139,12 +139,12 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         self.qdot_trajectory = None
         self.switched_on_intervals = None
 
-        self.DeclareVectorInputPort("iiwa_state_measured", 6)
+        self.DeclareVectorInputPort("iiwa_state_measured", 14)
 
         #self.DeclareVectorOutputPort(
         #    "iiwa_position_command", 3, self.CalcPositionOutput
         #)
-        self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
+        self.DeclareVectorOutputPort("iiwa_torque_cmd", 7, self.CalcTorqueOutput)
 
 
     def CalcPositionOutput(self, context, output):
@@ -169,15 +169,15 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         current_time = context.get_time()
         if not is_within_intervals(current_time, self.switched_on_intervals):
-            output.SetFromVector(np.zeros((3),))
+            output.SetFromVector(np.zeros((7),))
             return
 
         q_desired = self.trajectory.value(current_time).T.ravel()
         qdot_desired = self.qdot_trajectory.value(current_time).T.ravel()
 
         state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
-        q_now = state_now[:3]
-        qdot_now = state_now[3:]
+        q_now = state_now[:7]
+        qdot_now = state_now[7:]
 
         self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
         self._plant.SetVelocities(self._plant_context, self._iiwa, qdot_now)
@@ -186,11 +186,11 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         forces = MultibodyForces(plant=self._plant)
         self._plant.CalcForceElementsContribution(self._plant_context, forces) # gravity and forces aplied to model
         # 0 = dynamics(tau, state) ; a = (f, state) a = F / m; F = ma
-        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(6,), forces)
+        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(10,), forces)
         #print('CalcTorqueOutput', self._plant.num_positions(), bias)
 
         tau -= bias
-        tau = tau[:3]
+        tau = tau[:7]
 
         e = q_desired - q_now
         e_dot = qdot_desired - qdot_now
@@ -211,10 +211,10 @@ class HybridCartesianController(LeafSystem):
         self.cart_trajectory = None
         self.vel_trajectory = None
 
-        self.kp_tang_vec = np.zeros(3,) + kp_tang
-        self.kd_tang_vec = np.zeros(3,) + kd_tang
-        self.kf_norm_vec = np.zeros(3,) + kf_norm
-        self.kfd_norm_vec = np.zeros(3,) + kfd_norm
+        self.kp_tang_vec = np.zeros(7,) + kp_tang
+        self.kd_tang_vec = np.zeros(7,) + kd_tang
+        self.kf_norm_vec = np.zeros(7,) + kf_norm
+        self.kfd_norm_vec = np.zeros(7,) + kfd_norm
 
         self._iiwa = plant.GetModelInstanceByName("iiwa")
         end_effector = plant.GetBodyByName("body")
@@ -226,7 +226,7 @@ class HybridCartesianController(LeafSystem):
 
         self._joint_indices = [
             plant.GetJointByName(j).position_start()
-            for j in ("iiwa_joint_2", "iiwa_joint_4", "iiwa_joint_6")
+            for j in map(lambda i: f'iiwa_joint_{i}', range(1, 8))
         ]
 
         self.DeclareAbstractInputPort(
@@ -243,8 +243,8 @@ class HybridCartesianController(LeafSystem):
             "trajectory", AbstractValue.Make(PiecewisePose()))
 
         self.DeclareVectorInputPort("ee_force_measured", 3)
-        self.DeclareVectorInputPort("iiwa_state_measured", 6)
-        self.DeclareVectorOutputPort("iiwa_torque_cmd", 3, self.CalcTorqueOutput)
+        self.DeclareVectorInputPort("iiwa_state_measured", 14)
+        self.DeclareVectorOutputPort("iiwa_torque_cmd", 7, self.CalcTorqueOutput)
 
 
     def CalcTorqueOutput(self, context, output):
@@ -262,13 +262,13 @@ class HybridCartesianController(LeafSystem):
         current_time = context.get_time()
         if not is_within_intervals(current_time, self.switched_on_intervals) or \
            not is_within_intervals(current_time, self.traj_intervals):
-            output.SetFromVector(np.zeros((3),))
+            output.SetFromVector(np.zeros((7),))
             return
 
         state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
 
-        q_now = state_now[:3]
-        qdot_now = state_now[3:]
+        q_now = state_now[:7]
+        qdot_now = state_now[7:]
 
         self._plant.SetPositions(self._plant_context, self._iiwa, q_now)
         self._plant.SetVelocities(self._plant_context, self._iiwa, qdot_now)
@@ -278,9 +278,9 @@ class HybridCartesianController(LeafSystem):
         inner_gravity = self._plant.CalcGravityGeneralizedForces(self._plant_context)
         np.copyto(forces.mutable_generalized_forces(), inner_gravity)
 
-        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(6,), forces)
+        tau = self._plant.CalcInverseDynamics(self._plant_context, np.zeros(10,), forces)
         tau -= bias
-        tau = tau[:3]
+        tau = tau[:7]
 
         J_G = self._plant.CalcJacobianSpatialVelocity(
             self._plant_context,
