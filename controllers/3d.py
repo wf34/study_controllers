@@ -696,7 +696,7 @@ def Setup(parser):
 
 def simulate_2d(args: TwoDArgs):
     meshcat = StartMeshcat()
-    # meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
+    meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
 
     builder = DiagramBuilder()
 
