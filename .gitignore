@@ -163,3 +163,8 @@ diagram*.png
 2d-log.json
 
 text/lit_review/pdfs/*
+text/*.aux
+text/*.fdb_latexmk
+text/*.fls
+text/*.pdf
+text/*.synctex.gz
