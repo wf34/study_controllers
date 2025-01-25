@@ -197,6 +197,7 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         tau += e * self.kp_vec
         tau += e_dot * self.kd_vec
+        # print('stiff t={:.3f} {}'.format(current_time, tau))
         output.SetFromVector(tau)
 
 
@@ -327,7 +328,7 @@ class HybridCartesianController(LeafSystem):
 
         # force control
         m_measured = self.GetInputPort('ee_force_measured').Eval(context)[0]
-        m_goal = 2.
+        m_goal = 0.2
         me = m_goal - m_measured
         # print('me', me)
 
@@ -338,4 +339,5 @@ class HybridCartesianController(LeafSystem):
         tau += e_tau * self.kf_norm_vec
         tau += ve_norm_tau * self.kfd_norm_vec
 
+        # print('hybrid t={:.3f} {}'.format(current_time, tau))
         output.SetFromVector(tau)
