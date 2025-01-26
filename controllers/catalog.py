@@ -120,6 +120,7 @@ class ForceSensor(LeafSystem):
 class TrajFollowingJointStiffnessController(LeafSystem):
     def __init__(self, plant, kp, kd):
         LeafSystem.__init__(self)
+        self.last_print_time = None
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
 
@@ -197,13 +198,17 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         tau += e * self.kp_vec
         tau += e_dot * self.kd_vec
-        # print('stiff t={:.3f} {}'.format(current_time, tau))
+        if self.last_print_time is None or current_time - self.last_print_time > 2.:
+            print('stiff t={:.3f} {}'.format(current_time, tau))
+            self.last_print_time = current_time
+
         output.SetFromVector(tau)
 
 
 class HybridCartesianController(LeafSystem):
     def __init__(self, plant, kp_tang: float, kd_tang: float, kf_norm: float, kfd_norm: float):
         LeafSystem.__init__(self)
+        self.last_print_time = None
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
         self.X_Wshelf = None
@@ -339,5 +344,8 @@ class HybridCartesianController(LeafSystem):
         tau += e_tau * self.kf_norm_vec
         tau += ve_norm_tau * self.kfd_norm_vec
 
-        # print('hybrid t={:.3f} {}'.format(current_time, tau))
+        if self.last_print_time is None or current_time - self.last_print_time > 2.:
+            print('hybrid t={:.3f} {}'.format(current_time, tau))
+            self.last_print_time = current_time
+
         output.SetFromVector(tau)
