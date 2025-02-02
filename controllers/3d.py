@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import time
-import os
+import subprocess
 import typing
 import dataclasses as dc
 
@@ -54,7 +54,7 @@ from pydrake.all import (
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario, TIME_STEP
 from catalog import TrajFollowingJointStiffnessController, HybridCartesianController, ForceSensor
-from opt_trajectory import optimize_target_trajectory, make_cartesian_trajectory, make_wsg_trajectory, make_dummy_wsg_trajectory
+from planning import MultiTurnPlanner, MakeWsgTrajectory
 from state_monitor import StateMonitor
 from visualization_tools import AddMeshcatTriad
 
@@ -584,7 +584,7 @@ def _ApplyDriverConfigsSim(
             builder=builder,
         )
 
-class TwoDArgs(Tap):
+class SimArgs(Tap):
     target_browser_for_replay: str = 'xdg-open'
     diagram_destination: str = 'diagram.png'
     log_destination: str = '2d-log.json'
@@ -692,7 +692,7 @@ def Setup(parser):
     )
 
 
-def simulate_2d(args: TwoDArgs):
+def simulate(args: SimArgs):
     meshcat = StartMeshcat()
     # meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
 
@@ -708,48 +708,75 @@ def simulate_2d(args: TwoDArgs):
     if args.use_traj_vis:
         visualizer = station.GetSubsystemByName("meshcat_visualizer(illustration)")
 
+    wsg_trajectory = builder.AddSystem(MakeWsgTrajectory())
+
+    multi_turn_planner = builder.AddSystem(MultiTurnPlanner(args.select_controller, plant))
+
+    stiff_controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
+    hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 0.2, 10.))
+
+    # builder.Connect(
+    #     station.GetOutputPort('body_poses'),
+    #     multi_turn_planner.GetInputPort('body_poses')
+    # )
+
     adder = builder.AddSystem(Adder(2, 7))
-    controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
-    builder.ExportInput(controller.GetInputPort('trajectory'), 'inner_trajectory')
-    builder.ExportInput(controller.GetInputPort('switched_on_intervals'), 'stiff_c_switched_on_intervals')
+    builder.Connect(
+        stiff_controller.GetOutputPort("iiwa_torque_cmd"),
+        adder.get_input_port(0),
+    )
+    builder.Connect(
+        hyb_controller.GetOutputPort("iiwa_torque_cmd"),
+        adder.get_input_port(1),
+    )
+
+    builder.Connect(
+        multi_turn_planner.GetOutputPort('current_trajectory_for_wsg'),
+        wsg_trajectory.GetInputPort('abs_trajectory'),
+    )
+
+    builder.Connect(
+        wsg_trajectory.GetOutputPort('positions_from_trajectory'),
+        station.GetInputPort('wsg.position')
+    )
+
+    builder.Connect(
+        multi_turn_planner.GetOutputPort('current_trajectory_for_stiffness'),
+        stiff_controller.GetInputPort('trajectory')
+    )
+
+    builder.Connect(
+        multi_turn_planner.GetOutputPort('current_trajectory_for_hybrid'),
+        hyb_controller.GetInputPort('trajectory')
+    )
+
+    builder.Connect(
+        multi_turn_planner.GetOutputPort('stiffness_controller_switch'),
+        stiff_controller.GetInputPort('switch')
+    )
+
+    builder.Connect(
+        multi_turn_planner.GetOutputPort('hybrid_controller_switch'),
+        hyb_controller.GetInputPort('switch')
+    )
+
     force_sensor = builder.AddSystem(ForceSensor(plant))
-
-    wsg_trajectory_source = builder.AddSystem(TrajectorySource(make_dummy_wsg_trajectory()))
-    builder.Connect(wsg_trajectory_source.get_output_port(), station.GetInputPort('wsg.position'))
-
-    if 'stiffness' == args.select_controller:
-        builder.ExportInput(adder.get_input_port(1), 'torque_adder_2nd_term')
-    elif 'hybrid' == args.select_controller:
-        hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 0.2, 10.))
-        builder.ExportInput(hyb_controller.GetInputPort('switched_on_intervals'), 'hyb_c_switched_on_intervals')
-        builder.ExportInput(hyb_controller.GetInputPort('trajectory'), 'cartesian_trajectory')
-
-        builder.Connect(
-            force_sensor.GetOutputPort("sensed_force_out"),
-            hyb_controller.GetInputPort("ee_force_measured"),
-        )
-
-        builder.Connect(
-            station.GetOutputPort('body_poses'),
-            hyb_controller.GetInputPort('body_poses')
-        )
-        builder.Connect(
-            station.GetOutputPort('body_spatial_velocities'),
-            hyb_controller.GetInputPort('body_spatial_velocities')
-        )
-
-        builder.Connect(
-            station.GetOutputPort("iiwa_state"),
-            hyb_controller.GetInputPort("iiwa_state_measured"),
-        )
-
-        builder.Connect(
-            hyb_controller.GetOutputPort('iiwa_torque_cmd'),
-            adder.get_input_port(1)
-        )
-
-    else:
-        raise Exception('unknown controller requested')
+    builder.Connect(
+        force_sensor.GetOutputPort("sensed_force_out"),
+        hyb_controller.GetInputPort("ee_force_measured"),
+    )
+    builder.Connect(
+        station.GetOutputPort('body_poses'),
+        hyb_controller.GetInputPort('body_poses')
+    )
+    builder.Connect(
+        station.GetOutputPort('body_spatial_velocities'),
+        hyb_controller.GetInputPort('body_spatial_velocities')
+    )
+    builder.Connect(
+        station.GetOutputPort("iiwa_state"),
+        hyb_controller.GetInputPort("iiwa_state_measured"),
+    )
 
     builder.Connect(
         station.GetOutputPort('iiwa_generalized_contact_forces'),
@@ -766,12 +793,9 @@ def simulate_2d(args: TwoDArgs):
 
     builder.Connect(
         station.GetOutputPort("iiwa_state"),
-        controller.GetInputPort("iiwa_state_measured"),
+        stiff_controller.GetInputPort("iiwa_state_measured"),
     )
-    builder.Connect(
-        controller.GetOutputPort('iiwa_torque_cmd'),
-        adder.get_input_port(0)
-    )
+
     builder.Connect(
         adder.get_output_port(),
         station.GetInputPort("iiwa_actuation"),
@@ -784,75 +808,8 @@ def simulate_2d(args: TwoDArgs):
         simulator = Simulator(diagram)
         global_context = simulator.get_mutable_context()
     else:
+        raise Exception('this codepath gets broken, not sure, if or when will fix')
         global_context = diagram.CreateDefaultContext()
-
-    plant_context = plant.GetMyContextFromRoot(global_context)
-    X_WG = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
-    X_WVstart = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('nut'))
-
-    R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([180, 0, 90]))).inverse()
-    t_GoalGripper = [0., -0.085, -0.02]
-    t_GoalGripperPreGrasp = [0., -0.225, -0.02]
-    X_GoalGripper = RigidTransform(R_GoalGripper, np.zeros((3,)))
-    X_gripper_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripper)
-    X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
-
-    possible_nut_rotations = []
-    for ind, alpha in enumerate(np.radians(np.arange(30, 360, 60))):
-        R_1 = RollPitchYaw([0, alpha, 0]).ToRotationMatrix() @ X_WVstart.rotation()
-        vec = np.degrees(RollPitchYaw(R_1).vector()).tolist()
-        vec_with_ind = [ind, np.round(np.degrees(alpha))] + vec
-        #print("// ind={} angle {} RollPitchYaw: {:.1f} {:.1f} {:.1f}".format(*vec_with_ind))
-        #AddMeshcatTriad(meshcat, f'nut-sides-{alpha:.3f}', X_PT=X_curr_rot, opacity=0.33)
-        possible_nut_rotations.append(R_1)
-
-    arg_min = 0
-    least_ang_distance = float('inf')
-    R_WNutInBetterOrientation = RotationMatrix(RollPitchYaw(np.radians([90., 60., 0.])))
-    for ind, R_WNcand in enumerate(possible_nut_rotations):
-        loss = np.linalg.norm(np.degrees(RollPitchYaw(R_WNcand.InvertAndCompose(R_WNutInBetterOrientation)).vector()))
-        if loss < least_ang_distance:
-            least_ang_distance = loss
-            arg_min = ind
-
-    X_WGripperAtTurnStart_ = RigidTransform(possible_nut_rotations[arg_min], X_WVstart.translation()) @ X_GoalGripper
-    R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ possible_nut_rotations[arg_min]
-    X_WGripperAtTurnEnd_ = RigidTransform(R_WVend_, X_WVstart.translation()) @ X_GoalGripper
-
-    X_WGripperAtTurnStart = X_WGripperAtTurnStart_ @ X_gripper_offset
-    X_WGripperAtTurnEnd = X_WGripperAtTurnEnd_ @ X_gripper_offset
-
-    X_WGripperPreGraspAtTurnStart = X_WGripperAtTurnStart_ @ X_pre_grasp_offset
-    X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_pre_grasp_offset
-
-    AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
-    AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart)
-    AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
-    AddMeshcatTriad(meshcat, 'postgrasp-at-final-valve', X_PT=X_WGripperPostGraspAtTurnEnd)
-
-    trajectory, ts = optimize_target_trajectory([X_WG, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart, X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, X_WG],
-                                                plant, plant_context)
-    if trajectory is None and not args.use_traj_vis:
-        print('opt didnt succeed')
-        return
-
-    diagram.GetInputPort('inner_trajectory').FixValue(global_context, trajectory)
-
-    if not args.use_traj_vis:
-        wsg_trajectory = make_wsg_trajectory(ts)
-        wsg_trajectory_source.UpdateTrajectory(wsg_trajectory)
-
-    if 'stiffness' == args.select_controller and not args.use_traj_vis:
-        diagram.GetInputPort('torque_adder_2nd_term').FixValue(global_context, np.zeros((7),))
-        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[-1]]]))
-
-    elif 'hybrid' == args.select_controller and not args.use_traj_vis:
-        cart_trajectory = make_cartesian_trajectory([X_WGripperAtTurnStart, X_WGripperAtTurnEnd], [ts[3], ts[4]])
-        diagram.GetInputPort('cartesian_trajectory').FixValue(global_context, cart_trajectory)
-
-        diagram.GetInputPort('stiff_c_switched_on_intervals').FixValue(global_context, np.array([[ts[0], ts[3]],
-                                                                                                 [ts[4], ts[-1]]]))
-        diagram.GetInputPort('hyb_c_switched_on_intervals').FixValue(global_context, np.array([[ts[3], ts[4]]]))
 
     # minimalist_traj_vis(trajectory)
     #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
@@ -860,28 +817,26 @@ def simulate_2d(args: TwoDArgs):
     #meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
     #meshcat.SetTransform("end", X_Wpend)
 
-    if args.use_traj_vis:
-        rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)
-    else:
-        state_monitor = StateMonitor(args.log_destination, plant, diagram,
-                                     trajectory if 'stiffness' == args.select_controller else None,
-                                     cart_trajectory if 'hybrid' == args.select_controller else None,
-                                     meshcat)
-        simulator.set_monitor(state_monitor.callback)
+    #if args.use_traj_vis:
+    #    rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)
+    #else:
+        #state_monitor = StateMonitor(args.log_destination, plant, diagram,
+        #                             trajectory if 'stiffness' == args.select_controller else None,
+        #                             cart_trajectory if 'hybrid' == args.select_controller else None,
+        #                             meshcat)
+        #simulator.set_monitor(state_monitor.callback)
 
-        print('will do a trajectory of {} secs'.format(trajectory.end_time()))
-        plant.SetPositions(plant_context, plant.GetModelInstanceByName("iiwa"), trajectory.value(0))
 
-        simulator.Initialize()
-        meshcat.StartRecording(set_visualizations_while_recording=False)
-        simulator.AdvanceTo(trajectory.end_time())
-        meshcat.PublishRecording()
+    simulator.Initialize()
+    meshcat.StartRecording(set_visualizations_while_recording=False)
+    simulator.AdvanceTo(22) #trajectory.end_time())
+    meshcat.PublishRecording()
 
     web_url = meshcat.web_url()
     print(f'Meshcat is now available at {web_url}')
-    os.system(f'{args.target_browser_for_replay} {web_url}')
+    subprocess.call([args.target_browser_for_replay, web_url])
     time.sleep(30)
 
 
 if '__main__' == __name__:
-    simulate_2d(TwoDArgs().parse_args())
+    simulate(SimArgs().parse_args())

@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.linalg
+
 from pydrake.all import (
     AbstractValue,
     BasicVector,
@@ -14,14 +15,6 @@ from pydrake.all import (
     SpatialForce,
     SpatialVelocity
 )
-
-
-def is_within_intervals(target_time: float, intervals: np.array) -> bool:
-    for i in range(intervals.shape[0]):
-        start, end = intervals[i]
-        if intervals[i, 0] <= target_time and target_time < intervals[i, 1]:
-            return True
-    return False
 
 
 def get_rot2d_from_transform(X_Wo: RigidTransform) -> np.array:
@@ -132,13 +125,12 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         #self.ctrl = JointStiffnessController()
 
         self.DeclareAbstractInputPort(
-            "trajectory", AbstractValue.Make(PiecewisePolynomial()))
+            "switch", AbstractValue.Make(bool()))
         self.DeclareAbstractInputPort(
-            "switched_on_intervals", AbstractValue.Make(np.array([])))
+            "trajectory", AbstractValue.Make(PiecewisePolynomial()))
 
         self.trajectory = None
         self.qdot_trajectory = None
-        self.switched_on_intervals = None
 
         self.DeclareVectorInputPort("iiwa_state_measured", 14)
 
@@ -162,17 +154,11 @@ class TrajFollowingJointStiffnessController(LeafSystem):
             self.trajectory = self.GetInputPort('trajectory').Eval(context)
             self.qdot_trajectory = self.trajectory.MakeDerivative()
 
-        if self.switched_on_intervals is None:
-            self.switched_on_intervals = self.GetInputPort('switched_on_intervals').Eval(context)
-            if 2 == len(self.switched_on_intervals.shape) and \
-               2 != self.switched_on_intervals.shape[1]:
-                raise Exception(f'each row must be an interval, but is mishaped: {self.switched_on_intervals.shape}')
-
-        current_time = context.get_time()
-        if not is_within_intervals(current_time, self.switched_on_intervals):
+        if not self.GetInputPort('switch').Eval(context):
             output.SetFromVector(np.zeros((7),))
             return
 
+        current_time = context.get_time()
         q_desired = self.trajectory.value(current_time).T.ravel()
         qdot_desired = self.qdot_trajectory.value(current_time).T.ravel()
 
@@ -236,6 +222,9 @@ class HybridCartesianController(LeafSystem):
         ]
 
         self.DeclareAbstractInputPort(
+            "switch", AbstractValue.Make(bool()))
+
+        self.DeclareAbstractInputPort(
             "switched_on_intervals", AbstractValue.Make(np.array([])))
 
         self.DeclareAbstractInputPort(
@@ -259,18 +248,11 @@ class HybridCartesianController(LeafSystem):
             self.vel_trajectory = self.cart_trajectory.MakeDerivative()
             self.traj_intervals = np.array([self.cart_trajectory.start_time(), self.cart_trajectory.end_time()])[np.newaxis, :]
 
-        if self.switched_on_intervals is None:
-            self.switched_on_intervals = self.GetInputPort('switched_on_intervals').Eval(context)
-            if 2 == len(self.switched_on_intervals.shape) and \
-               2 != self.switched_on_intervals.shape[1]:
-                raise Exception(f'each row must be an interval, but is mishaped: {self.switched_on_intervals.shape}')
-
-        current_time = context.get_time()
-        if not is_within_intervals(current_time, self.switched_on_intervals) or \
-           not is_within_intervals(current_time, self.traj_intervals):
+        if not self.GetInputPort('switch').Eval(context):
             output.SetFromVector(np.zeros((7),))
             return
 
+        current_time = context.get_time()
         state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
 
         q_now = state_now[:7]
