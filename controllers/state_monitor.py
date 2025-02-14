@@ -16,6 +16,7 @@ from pydrake.all import (
 import numpy as np
 
 from catalog import get_transl2d_from_transform, get_rot2d_from_transform
+from planning import MultiTurnPlanner, TurnStage
 
 class Vector2(BaseModel):
     x: float
@@ -120,3 +121,19 @@ class StateMonitor:
                 self._file.flush()
 
         return EventStatus.DidNothing()
+
+
+class TerminationCheck():
+    def __init__(self, planner: MultiTurnPlanner, outer_stage_obj: List[TurnStage]):
+        self.planner = planner
+        self.stage_obj = outer_stage_obj
+
+    def callback(self, root_context):
+        planner_context = self.planner.GetMyContextFromRoot(root_context)
+        stage = self.planner.GetOutputPort('current_stage').Eval(planner_context)
+        self.stage_obj[0] = stage
+        if stage == TurnStage.FINISH:
+            print('hi from TerminationCheck')
+            return EventStatus.ReachedTermination(self.planner, 'finished the task')
+        else:
+            return EventStatus.DidNothing()

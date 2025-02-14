@@ -54,8 +54,8 @@ from pydrake.all import (
 from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario, TIME_STEP
 from catalog import TrajFollowingJointStiffnessController, HybridCartesianController, ForceSensor
-from planning import MultiTurnPlanner, MakeWsgTrajectory
-from state_monitor import StateMonitor
+from planning import MultiTurnPlanner, MakeWsgTrajectory, TurnStage
+from state_monitor import StateMonitor, TerminationCheck
 from visualization_tools import AddMeshcatTriad
 
 def minimalist_traj_vis(traj):
@@ -826,10 +826,24 @@ def simulate(args: SimArgs):
         #                             meshcat)
         #simulator.set_monitor(state_monitor.callback)
 
+    stage = [TurnStage.UNSET]
+    termination_check = TerminationCheck(multi_turn_planner, stage)
+    simulator.set_monitor(termination_check.callback)
 
     simulator.Initialize()
     meshcat.StartRecording(set_visualizations_while_recording=False)
-    simulator.AdvanceTo(22) #trajectory.end_time())
+
+    while True:
+        now = global_context.get_time()
+        print(now)
+        new_boudary_time = now + 20.
+        print(f'AdvanceTo {new_boudary_time}')
+        simulator.AdvanceTo(new_boudary_time)
+        if new_boudary_time >= 40 or TurnStage.FINISH == stage[0]:
+            break
+        else:
+            print(f'now, at t={now:.1f}, we continue this simulation')
+
     meshcat.PublishRecording()
 
     web_url = meshcat.web_url()

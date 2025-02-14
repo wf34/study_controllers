@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple, Literal
+from enum import Enum
 
 import numpy as np
 
@@ -167,6 +168,22 @@ def solve_for_grip_direction(X_WVstart: RigidTransform) -> RotationMatrix:
 
     return possible_nut_rotations[arg_min]
 
+class TurnStage(Enum):
+    UNSET = 'unset'
+    APPROACH = 'approach'
+    SCREW = 'screw'
+    RETRACT = 'retract'
+    FINISH = 'finish'
+
+    def next(self):
+        members = list(self.__class__)
+        index = members.index(self)
+        index = index + 1
+        if index >= len(members):
+            return None
+        else:
+            return members[index]
+
 
 class MultiTurnPlanner(LeafSystem):
     def __init__(self,
@@ -176,6 +193,7 @@ class MultiTurnPlanner(LeafSystem):
         LeafSystem.__init__(self)
         self.plant = plant
         self.plant_context = plant.CreateDefaultContext()
+        self.stage: TurnStage = TurnStage.UNSET
 
         if mode not in ['stiffness', 'hybrid']:
             raise Exception('impossible mode', mode)
@@ -193,19 +211,24 @@ class MultiTurnPlanner(LeafSystem):
             AbstractValue.Make(PiecewisePose()))
         self.wsg_trajectory_index = self.DeclareAbstractState(
             AbstractValue.Make(PiecewisePolynomial()))
+        self.needs_reinit = self.DeclareAbstractState(
+            AbstractValue.Make(True))
 
         self.timings_index = self.DeclareAbstractState(
             AbstractValue.Make([]))
 
+        self.inits = { x: False for x in ['iiwa_trajectory', 'wsg_trajectory', 'taskspace_trajectory', 'ts'] }
         self.DeclareAbstractOutputPort(
             "current_trajectory_for_stiffness", lambda: AbstractValue.Make(PiecewisePolynomial()), self.set_stiffness_trajectory)
         self.DeclareAbstractOutputPort(
             "current_trajectory_for_hybrid", lambda: AbstractValue.Make(PiecewisePose()), self.set_hybrid_trajectory)
         self.DeclareAbstractOutputPort(
             "current_trajectory_for_wsg", lambda: AbstractValue.Make(PiecewisePolynomial()), self.set_gripper_trajectory)
+        self.DeclareAbstractOutputPort(
+            "current_stage", lambda: AbstractValue.Make(TurnStage.UNSET), self.calc_current_stage)
 
-        #self.DeclarePerStepDiscreteUpdateEvent(self.reinitialize_turn)
-        self.DeclareInitializationUnrestrictedUpdateEvent(self.reinitialize_turn)
+        # self.DeclareInitializationUnrestrictedUpdateEvent(self.reinitialize_turn)
+        self.DeclarePeriodicUnrestrictedUpdateEvent(.5, .0, self.reinitialize_turn)
 
 
     def set_stiffness_trajectory(self, context, output):
@@ -232,6 +255,8 @@ class MultiTurnPlanner(LeafSystem):
     def set_stiffness_switch(self, context, output):
         t = context.get_time()
         ts = context.get_abstract_state(int(self.timings_index)).get_value()
+        if len(ts) == 0:
+            return
         if self.mode == 'stiffness':
             output.set_value(ts[0] <= t and t < ts[-1])
         else:
@@ -244,10 +269,24 @@ class MultiTurnPlanner(LeafSystem):
             output.set_value(False)
         else:
             ts = context.get_abstract_state(int(self.timings_index)).get_value()
-            output.set_value( ts[3] <= t and t < ts[4] )
+            if 0 != len(ts):
+                output.set_value( ts[3] <= t and t < ts[4] )
+
+
+    def calc_current_stage(self, context, output):
+        output.set_value(self.stage)
+
 
     def reinitialize_turn(self, context, state):
-        print('reinitialize_turn?')
+        print('reinitialize_turn? at t=', context.get_time())
+        needs_reinit_ = state.get_mutable_abstract_state(int(self.needs_reinit)).get_value()
+        if not needs_reinit_:
+            print('doesn\'t need reinit')
+            if context.get_time() > 10:
+                next_stage = self.stage.next()
+                if next_stage:
+                    self.stage = next_stage
+            return
 
         X_WG = self.plant.EvalBodyPoseInWorld(self.plant_context, self.plant.GetBodyByName('body'))
         X_WVstart = self.plant.EvalBodyPoseInWorld(self.plant_context, self.plant.GetBodyByName('nut'))
@@ -283,6 +322,7 @@ class MultiTurnPlanner(LeafSystem):
         if trajectory is None:
             print('opt didnt succeed')
             exit(0)
+
         print('timings ', ts)
         wsg_trajectory = make_wsg_trajectory(ts)
         cart_trajectory = make_cartesian_trajectory([X_WGripperAtTurnStart, X_WGripperAtTurnEnd], [ts[3], ts[4]])
@@ -292,9 +332,14 @@ class MultiTurnPlanner(LeafSystem):
         state.get_mutable_abstract_state(int(self.taskspace_trajectory_index)).set_value(cart_trajectory)
         state.get_mutable_abstract_state(int(self.timings_index)).set_value(ts)
 
-        self.inits = { x: False for x in ['iiwa_trajectory', 'wsg_trajectory', 'taskspace_trajectory', 'ts'] }
 
         self.plant.SetPositions(self.plant_context, self.plant.GetModelInstanceByName("iiwa"), trajectory.value(0))
+
+        state.get_mutable_abstract_state(int(self.needs_reinit)).set_value(False)
+        self.inits = { x: False for x in ['iiwa_trajectory', 'wsg_trajectory', 'taskspace_trajectory', 'ts'] }
+        next_stage = self.stage.next()
+        if next_stage:
+            self.stage = next_stage
 
 
 def MakeWsgTrajectory() -> Diagram:

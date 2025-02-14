@@ -133,26 +133,18 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         self.qdot_trajectory = None
 
         self.DeclareVectorInputPort("iiwa_state_measured", 14)
-
-        #self.DeclareVectorOutputPort(
-        #    "iiwa_position_command", 3, self.CalcPositionOutput
-        #)
         self.DeclareVectorOutputPort("iiwa_torque_cmd", 7, self.CalcTorqueOutput)
-
-
-    def CalcPositionOutput(self, context, output):
-        """Set q_d = q_now. This ensures the iiwa goes into pure torque mode in sim by setting the position control torques in InverseDynamicsController to zero.
-        NOTE(terry-suh): Do not use this method on hardware or deploy this notebook on hardware.
-        We can only simulate pure torque control mode for iiwa on sim.
-        """
-        q_now = self.GetInputPort("iiwa_position_measured").Eval(context)
-        output.SetFromVector(q_now)
 
 
     def CalcTorqueOutput(self, context, output):
         if self.trajectory is None:
-            self.trajectory = self.GetInputPort('trajectory').Eval(context)
-            self.qdot_trajectory = self.trajectory.MakeDerivative()
+            trajectory = self.GetInputPort('trajectory').Eval(context)
+            if trajectory.get_number_of_segments() > 0:
+                self.trajectory = trajectory
+                self.qdot_trajectory = self.trajectory.MakeDerivative()
+            else:
+                output.SetFromVector(np.zeros((7),))
+                return
 
         if not self.GetInputPort('switch').Eval(context):
             output.SetFromVector(np.zeros((7),))
@@ -198,7 +190,6 @@ class HybridCartesianController(LeafSystem):
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
         self.X_Wshelf = None
-        self.switched_on_intervals = None
 
         self.cart_trajectory = None
         self.vel_trajectory = None
@@ -225,9 +216,6 @@ class HybridCartesianController(LeafSystem):
             "switch", AbstractValue.Make(bool()))
 
         self.DeclareAbstractInputPort(
-            "switched_on_intervals", AbstractValue.Make(np.array([])))
-
-        self.DeclareAbstractInputPort(
             "body_poses", AbstractValue.Make([RigidTransform()])
         )
         self.DeclareAbstractInputPort(
@@ -244,9 +232,14 @@ class HybridCartesianController(LeafSystem):
 
     def CalcTorqueOutput(self, context, output):
         if self.cart_trajectory is None:
-            self.cart_trajectory = self.GetInputPort('trajectory').Eval(context)
-            self.vel_trajectory = self.cart_trajectory.MakeDerivative()
-            self.traj_intervals = np.array([self.cart_trajectory.start_time(), self.cart_trajectory.end_time()])[np.newaxis, :]
+            cart_trajectory = self.GetInputPort('trajectory').Eval(context)
+            if cart_trajectory.get_number_of_segments() > 0:
+                self.cart_trajectory = cart_trajectory
+                self.vel_trajectory = self.cart_trajectory.MakeDerivative()
+                self.traj_intervals = np.array([self.cart_trajectory.start_time(), self.cart_trajectory.end_time()])[np.newaxis, :]
+            else:
+                output.SetFromVector(np.zeros((7),))
+                return
 
         if not self.GetInputPort('switch').Eval(context):
             output.SetFromVector(np.zeros((7),))
