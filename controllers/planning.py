@@ -20,31 +20,19 @@ from pydrake.all import (
 )
 
 
-def get_current_positions(plant, plant_context):
-    q_ = np.zeros(plant.num_positions(),)
-    q = plant.GetPositions(
-        plant_context,
-        plant.GetModelInstanceByName("iiwa"),
-    )
-    q_[:7] = q
-    return q_
+def optimize_target_trajectory(keyframes: List[RigidTransform],
+                               orientation_constraint_flags: List[bool],
+                               duplicate_keyframe_flags: List[bool],
+                               plant: MultibodyPlant,
+                               q_nominal: np.array) -> Optional[np.array]:
 
+    assert len(keyframes) == len(orientation_constraint_flags)
+    assert len(keyframes) == len(duplicate_keyframe_flags)
+    # q_nominal are the current positions
+    print('||q_nominal|| =', q_nominal.shape, 'q_nominal', q_nominal)
+    q_nominal_full = np.zeros(plant.num_positions(),)
+    q_nominal_full[:7] = q_nominal
 
-def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_context) -> Tuple[Optional[PiecewisePolynomial], Optional[np.array]]:
-    '''
-    desc
-
-    Args:
-    Returns:
-    '''
-    iiwa_model_instance = plant.GetModelInstanceByName('iiwa')
-    q_nominal = get_current_positions(plant, plant_context)
-    print('q_nominal', q_nominal)
-
-    num_q = plant.num_positions()
-    num_iiwa_only = plant.num_positions(iiwa_model_instance)
-    x = list(map(int, plant.GetJointIndices(model_instance=iiwa_model_instance)))
-    print(f'GetJointIndices {x} of total {num_q}; of total iiwa-related: {num_iiwa_only}')
     print('dofs:', plant.num_actuated_dofs())
     print('num_model_instances:', plant.num_model_instances())
     print('num_joints:', plant.num_joints())
@@ -53,20 +41,23 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         plant.GetJointByName(j).position_start()
         for j in map(lambda i: f'iiwa_joint_{i}', range(1, 8))
     ]
-    print('joint_indices:', joint_indices)
+    print('joint_indices:', joint_indices, 'joints len=', len(joint_indices))
 
     q_keyframes = []
-    for kid, keyframe in enumerate(keyframes):
+    is_first = True
+    for keyframe, do_constrain_orientation, do_kf_duplicate in zip(
+            keyframes, orientation_constraint_flags, duplicate_keyframe_flags):
         ik = InverseKinematics(plant)
         q_variables = ik.q()
         prog = ik.prog()
 
-        if 0 == kid:
-            prog.SetInitialGuess(q_variables, q_nominal)
+        if is_first:
+            prog.SetInitialGuess(q_variables, q_nominal_full)
+            is_first = False
         else:
             prog.SetInitialGuess(q_variables, q_keyframes[-1])
             
-        prog.AddCost(np.square(np.dot(q_variables, q_nominal)))
+        prog.AddCost(np.square(np.dot(q_variables, q_nominal_full)))
 
         offset = np.array([0.01, 0.01, 0.01])
         offset_upper = keyframe.translation() + offset
@@ -81,7 +72,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
             p_AQ_lower=offset_lower,
             p_AQ_upper=offset_upper)
 
-        if kid in (1, 2, 3, 4):
+        if do_constrain_orientation:
             ik.AddOrientationConstraint(
                     frameAbar=plant.GetFrameByName("body"),
                     R_AbarA=RotationMatrix.Identity(),
@@ -94,11 +85,13 @@ def optimize_target_trajectory(keyframes: List[RigidTransform], plant, plant_con
         if not result.is_success():
             print(f'no sol for i={kid}')
             print(result.GetInfeasibleConstraintNames(prog))
-            break
+            return None
         else:
             q_keyframes.append(result.GetSolution(q_variables))
-            if kid in (2,3):
+            if do_kf_duplicate:
                 q_keyframes.append(q_keyframes[-1])
+
+    return np.array(q_keyframes)
 
     print('q_keyframes, keyframes:', len(q_keyframes), len(keyframes))
     if len(q_keyframes) - 2 == len(keyframes):
@@ -124,21 +117,30 @@ def make_cartesian_trajectory(keyframes: List[RigidTransform], timestamps: List[
     return PiecewisePose.MakeLinear(timestamps, keyframes)
 
 
-def make_wsg_trajectory(timestamps: List[float]):
-    assert 8 == len(timestamps)
+def make_wsg_trajectory(duplicate_flags: List[bool], timestamps: List[float], start: Literal['open', 'closed']):
+    assert start in ('open', 'closed')
+
+    def fix_duplicate_flags(flags):
+        for id_, flag in enumerate(flags):
+            if flag:
+                flags.insert(id_ + 1, False)
+
+    fix_duplicate_flags(duplicate_flags)
+    if len(duplicate_flags) != len(timestamps):
+        raise Exception('`duplicate flags` mess-up')
+
     opened = np.array([0.107])
     closed = np.array([0.0])
-    traj_wsg_command = PiecewisePolynomial.FirstOrderHold(
-        timestamps[:2],
-        np.hstack([[opened], [opened]]),
-    )
+    tictac = [opened, closed]
 
-    wsg_keyframes = [opened, opened, opened, closed, closed, opened, opened, opened]
-    #                0       1       2       3       4       5       6       7
-    for ts, wsg_position in zip(timestamps[2:], wsg_keyframes[2:]):
-        traj_wsg_command.AppendFirstOrderSegment(ts, wsg_position)
-
-    return traj_wsg_command
+    ind = 0 if start == 'open' else 1
+    positions = []
+    for duplicate_flag in duplicate_flags:
+        if duplicate_flag:
+            ind = (ind + 1) % 2
+        positions.append(tictac[ind % 2])
+    positions = np.array(positions)
+    return PiecewisePolynomial.FirstOrderHold(timestamps, positions.T)
 
 
 def make_dummy_wsg_trajectory() -> PiecewisePolynomial:
@@ -202,22 +204,26 @@ class MultiTurnPlanner(LeafSystem):
             if mode == 'hybrid':
                 raise Exception('didnt implement yet')
 
+        self.DeclareAbstractInputPort(
+            "body_poses", AbstractValue.Make([RigidTransform()])
+        )
+        self.DeclareVectorInputPort("iiwa_state_measured", 14)
+
+        self.X_WGinitial = None
+        self.gripper_index = self.plant.GetBodyByName('body').index()
+        self.nut_index = self.plant.GetBodyByName('nut').index()
+
         self.DeclareAbstractOutputPort("stiffness_controller_switch", lambda: AbstractValue.Make(bool()), self.set_stiffness_switch)
         self.DeclareAbstractOutputPort("hybrid_controller_switch", lambda: AbstractValue.Make(bool()), self.set_hybrid_switch)
 
-        self.iiwa_trajectory_index = self.DeclareAbstractState(
-            AbstractValue.Make(PiecewisePolynomial()))
-        self.taskspace_trajectory_index = self.DeclareAbstractState(
-            AbstractValue.Make(PiecewisePose()))
-        self.wsg_trajectory_index = self.DeclareAbstractState(
-            AbstractValue.Make(PiecewisePolynomial()))
-        self.needs_reinit = self.DeclareAbstractState(
-            AbstractValue.Make(True))
+        self.iiwa_trajectory_index = int(self.DeclareAbstractState(
+            AbstractValue.Make(PiecewisePolynomial())))
+        self.taskspace_trajectory_index = int(self.DeclareAbstractState(
+            AbstractValue.Make(PiecewisePose())))
+        self.wsg_trajectory_index = int(self.DeclareAbstractState(
+            AbstractValue.Make(PiecewisePolynomial())))
 
-        self.timings_index = self.DeclareAbstractState(
-            AbstractValue.Make([]))
-
-        self.inits = { x: False for x in ['iiwa_trajectory', 'wsg_trajectory', 'taskspace_trajectory', 'ts'] }
+        self.traj_published = { x: False for x in ['iiwa_trajectory', 'wsg_trajectory', 'taskspace_trajectory'] }
         self.DeclareAbstractOutputPort(
             "current_trajectory_for_stiffness", lambda: AbstractValue.Make(PiecewisePolynomial()), self.set_stiffness_trajectory)
         self.DeclareAbstractOutputPort(
@@ -227,69 +233,140 @@ class MultiTurnPlanner(LeafSystem):
         self.DeclareAbstractOutputPort(
             "current_stage", lambda: AbstractValue.Make(TurnStage.UNSET), self.calc_current_stage)
 
-        # self.DeclareInitializationUnrestrictedUpdateEvent(self.reinitialize_turn)
-        self.DeclarePeriodicUnrestrictedUpdateEvent(.5, .0, self.reinitialize_turn)
+        self.DeclarePeriodicUnrestrictedUpdateEvent(.1, .0, self.reinitialize_plan)
 
 
     def set_stiffness_trajectory(self, context, output):
-        if not self.inits['iiwa_trajectory']:
-            self.inits['iiwa_trajectory'] = True
-            output.set_value(context.get_abstract_state(int(self.iiwa_trajectory_index)).get_value())
+        if not self.traj_published['iiwa_trajectory']:
+            self.traj_published['iiwa_trajectory'] = True
+            output.set_value(context.get_abstract_state(self.iiwa_trajectory_index).get_value())
 
 
     def set_hybrid_trajectory(self, context, output):
-        if not self.inits['taskspace_trajectory']:
-            self.inits['taskspace_trajectory'] = True
-            output.set_value(context.get_abstract_state(int(self.taskspace_trajectory_index)).get_value())
+        if not self.traj_published['taskspace_trajectory']:
+            self.traj_published['taskspace_trajectory'] = True
+            output.set_value(context.get_abstract_state(self.taskspace_trajectory_index).get_value())
 
 
     def set_gripper_trajectory(self, context, output):
-        if not self.inits['wsg_trajectory']:
-            print('sets wsg traj')
-            self.inits['wsg_trajectory'] = True
-            wsg_traj = context.get_abstract_state(int(self.wsg_trajectory_index)).get_value()
+        if not self.traj_published['wsg_trajectory']:
+            self.traj_published['wsg_trajectory'] = True
+            wsg_traj = context.get_abstract_state(self.wsg_trajectory_index).get_value()
             output.set_value(wsg_traj)
-            #self.wsg_traj_source.UpdateTrajectory(wsg_traj)
+
+
+    def get_stiffness_switch(self) -> bool:
+        return self.mode == 'stiffness' or \
+               self.stage in (TurnStage.APPROACH, TurnStage.RETRACT)
 
 
     def set_stiffness_switch(self, context, output):
-        t = context.get_time()
-        ts = context.get_abstract_state(int(self.timings_index)).get_value()
-        if len(ts) == 0:
-            return
-        if self.mode == 'stiffness':
-            output.set_value(ts[0] <= t and t < ts[-1])
-        else:
-            output.set_value((ts[0] <= t and t < ts[3]) or \
-                             (ts[4] <= t and t < ts[-1]))
+        is_stiffness = self.get_stiffness_switch()
+        output.set_value(is_stiffness)
 
 
     def set_hybrid_switch(self, context, output):
-        if self.mode == 'stiffness':
-            output.set_value(False)
-        else:
-            ts = context.get_abstract_state(int(self.timings_index)).get_value()
-            if 0 != len(ts):
-                output.set_value( ts[3] <= t and t < ts[4] )
+        is_force = not self.get_stiffness_switch()
+        output.set_value(is_force)
 
 
     def calc_current_stage(self, context, output):
         output.set_value(self.stage)
 
 
-    def reinitialize_turn(self, context, state):
-        print('reinitialize_turn? at t=', context.get_time())
-        needs_reinit_ = state.get_mutable_abstract_state(int(self.needs_reinit)).get_value()
-        if not needs_reinit_:
-            print('doesn\'t need reinit')
-            if context.get_time() > 10:
-                next_stage = self.stage.next()
-                if next_stage:
-                    self.stage = next_stage
+    def solve_for_approach(self, keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
+        assert TurnStage.APPROACH == next_stage
+
+        iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
+        iiwa_positions = iiwa_state[:7]
+
+        q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
+                                                 self.plant, iiwa_positions)
+        valid_timestamps = [0., 2., 4., 6]
+                          # 0, start pose
+                              # 1, reach pre grasp pose
+                                  # 2, reach grasp pose
+                                      # 3, reach closed grip
+        if q_keyframes is None:
+            print('opt has failed')
+            exit(1)
             return
 
-        X_WG = self.plant.EvalBodyPoseInWorld(self.plant_context, self.plant.GetBodyByName('body'))
-        X_WVstart = self.plant.EvalBodyPoseInWorld(self.plant_context, self.plant.GetBodyByName('nut'))
+        if q_keyframes.shape[0] != len(valid_timestamps):
+            raise Exception('logical mistake in traj building {}, {}'.format(q_keyframes.shape[0], len(valid_timestamps)))
+
+        q_trajectory = PiecewisePolynomial.FirstOrderHold(valid_timestamps, q_keyframes[:, :7].T)
+        start_gripper_position = 'open'
+        wsg_trajectory = make_wsg_trajectory(duplicate_flags, valid_timestamps, start_gripper_position)
+
+        state.get_mutable_abstract_state(self.iiwa_trajectory_index).set_value(q_trajectory)
+        state.get_mutable_abstract_state(self.wsg_trajectory_index).set_value(wsg_trajectory)
+
+        self.stage = next_stage
+        for x in ['iiwa_trajectory', 'wsg_trajectory']:
+            self.traj_published[x] = False
+
+
+    def solve_for_turn(self, keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
+        assert TurnStage.SCREW == next_stage
+
+        iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
+        iiwa_positions = iiwa_state[:7]
+
+        q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
+                                                 self.plant, iiwa_positions)
+
+        self.stage = next_stage
+        for x in ['iiwa_trajectory', 'wsg_trajectory', 'taskspace_trajectory']:
+            self.traj_published[x] = False
+
+
+    def solve_for_retract(self):
+        assert TurnStage.RETRACT == next_stage
+
+        self.stage = next_stage
+        for x in ['iiwa_trajectory', 'wsg_trajectory']:
+            self.traj_published[x] = False
+
+
+    def get_latest_current_trajectory_time(self, context, state) -> Optional[float]:
+        def get_opt_tj(context, state, state_index: int):
+            traj = context.get_abstract_state(state_index).get_value()
+            return None if 0 == traj.get_number_of_segments() else traj
+
+        tjs = list(filter(lambda y: y is not None, map(lambda x: get_opt_tj(context, state, x),
+                   [self.iiwa_trajectory_index, self.taskspace_trajectory_index])))
+        if 0 == len(tjs):
+            return None
+        else:
+            return max(map(lambda t: t.end_time(), tjs))
+
+
+    def reinitialize_plan(self, context, state):
+        now = context.get_time()
+        have_plant_until_t = self.get_latest_current_trajectory_time(context, state)
+        if have_plant_until_t is not None and now < have_plant_until_t:
+            return
+
+        next_stage = self.stage.next()
+        if not next_stage:
+            return
+
+        if TurnStage.UNSET == next_stage:
+            raise Exception('unreachable')
+        elif TurnStage.FINISH == next_stage:
+            self.stage = next_stage
+            return
+
+        current_poses = self.GetInputPort("body_poses").Eval(context)
+        X_WG = current_poses[self.gripper_index]
+        if TurnStage.APPROACH == next_stage:
+            self.X_WGinitial = X_WG
+        elif next_stage in (TurnStage.SCREW, TurnStage.RETRACT):
+            assert self.X_WGinitial is not None
+
+
+        print('reinitialize_plan? at t=', context.get_time())
 
         R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([180, 0, 90]))).inverse()
         t_GoalGripper = [0., -0.085, -0.02]
@@ -298,16 +375,12 @@ class MultiTurnPlanner(LeafSystem):
         X_gripper_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripper)
         X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
 
-        R_WVpreferred = solve_for_grip_direction(X_WVstart)
 
-        X_WGripperAtTurnStart_ = RigidTransform(R_WVpreferred, X_WVstart.translation()) @ X_GoalGripper
         R_WVend_ = RollPitchYaw(np.radians([0, 30, 0])).ToRotationMatrix() @ R_WVpreferred
         X_WGripperAtTurnEnd_ = RigidTransform(R_WVend_, X_WVstart.translation()) @ X_GoalGripper
 
-        X_WGripperAtTurnStart = X_WGripperAtTurnStart_ @ X_gripper_offset
         X_WGripperAtTurnEnd = X_WGripperAtTurnEnd_ @ X_gripper_offset
 
-        X_WGripperPreGraspAtTurnStart = X_WGripperAtTurnStart_ @ X_pre_grasp_offset
         X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_pre_grasp_offset
 
         #AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
@@ -315,31 +388,49 @@ class MultiTurnPlanner(LeafSystem):
         #AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
         #AddMeshcatTriad(meshcat, 'postgrasp-at-final-valve', X_PT=X_WGripperPostGraspAtTurnEnd)
 
-        trajectory, ts = optimize_target_trajectory(
-            [X_WG, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart, X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, X_WG],
-            self.plant, self.plant_context)
+        if TurnStage.APPROACH == next_stage:
+            X_WVstart = current_poses[self.nut_index]
+            R_WVpreferred = solve_for_grip_direction(X_WVstart)
+            X_WGripperAtTurnStart_ = RigidTransform(R_WVpreferred, X_WVstart.translation()) @ X_GoalGripper
+            X_WGripperAtTurnStart = X_WGripperAtTurnStart_ @ X_gripper_offset
+            X_WGripperPreGraspAtTurnStart = X_WGripperAtTurnStart_ @ X_pre_grasp_offset
 
-        if trajectory is None:
-            print('opt didnt succeed')
-            exit(0)
+            keyframes = [self.X_WGinitial, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart]
+            orientation_flags = [False, True, True]
+            duplicate_flags = [False, False, True]
+            self.solve_for_approach(keyframes, orientation_flags, duplicate_flags, next_stage, state, context)
 
-        print('timings ', ts)
-        wsg_trajectory = make_wsg_trajectory(ts)
-        cart_trajectory = make_cartesian_trajectory([X_WGripperAtTurnStart, X_WGripperAtTurnEnd], [ts[3], ts[4]])
+        elif TurnStage.SCREW == next_stage:
+            # .
+            X_WGripperAtTurnStart = X_WG
+            keyframes = [X_WGripperAtTurnStart, X_WGripperAtTurnEnd]
 
-        state.get_mutable_abstract_state(int(self.iiwa_trajectory_index)).set_value(trajectory)
-        state.get_mutable_abstract_state(int(self.wsg_trajectory_index)).set_value(wsg_trajectory)
-        state.get_mutable_abstract_state(int(self.taskspace_trajectory_index)).set_value(cart_trajectory)
-        state.get_mutable_abstract_state(int(self.timings_index)).set_value(ts)
+            orientation_flags = [True, True]
+            duplicate_flags = [False, False]
+            self.solve_for_turn(keyframes, orientation_flags, duplicate_flags, next_stage, state, context)
 
+        elif TurnStage.RETRACT == next_stage:
+            keyframes = [X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, self.X_WGinitial]
+            self.solve_for_retract(keyframes, next_stage)
 
-        self.plant.SetPositions(self.plant_context, self.plant.GetModelInstanceByName("iiwa"), trajectory.value(0))
+        else:
+            raise Exception('unreachable')
 
-        state.get_mutable_abstract_state(int(self.needs_reinit)).set_value(False)
-        self.inits = { x: False for x in ['iiwa_trajectory', 'wsg_trajectory', 'taskspace_trajectory', 'ts'] }
-        next_stage = self.stage.next()
-        if next_stage:
-            self.stage = next_stage
+        #trajectory, ts = optimize_target_trajectory(keyframes, self.plant, self.plant_context)
+
+        #if trajectory is None:
+        #    print('opt didnt succeed')
+        #    exit(1)
+
+        #wsg_trajectory = make_wsg_trajectory(ts)
+        #cart_trajectory = make_cartesian_trajectory([X_WGripperAtTurnStart, X_WGripperAtTurnEnd], [ts[3], ts[4]])
+
+        #state.get_mutable_abstract_state(self.iiwa_trajectory_index).set_value(trajectory)
+        #state.get_mutable_abstract_state(self.wsg_trajectory_index).set_value(wsg_trajectory)
+        #state.get_mutable_abstract_state(self.taskspace_trajectory_index).set_value(cart_trajectory)
+
+        # this is cheating. maybe try to do without it |
+        # self.plant.SetPositions(self.plant_context, self.plant.GetModelInstanceByName("iiwa"), trajectory.value(0))
 
 
 def MakeWsgTrajectory() -> Diagram:

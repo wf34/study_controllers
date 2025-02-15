@@ -736,10 +736,14 @@ def simulate(args: SimArgs):
     stiff_controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
     hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 0.2, 10.))
 
-    # builder.Connect(
-    #     station.GetOutputPort('body_poses'),
-    #     multi_turn_planner.GetInputPort('body_poses')
-    # )
+    builder.Connect(
+        station.GetOutputPort('body_poses'),
+        multi_turn_planner.GetInputPort('body_poses')
+    )
+    builder.Connect(
+        station.GetOutputPort("iiwa_state"),
+        multi_turn_planner.GetInputPort("iiwa_state_measured"),
+    )
 
     adder = builder.AddSystem(Adder(2, 7))
     builder.Connect(

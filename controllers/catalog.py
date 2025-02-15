@@ -52,6 +52,14 @@ def get_vel2d_from_spatial_velocity(v_o_W: np.array) -> np.array:
     return np.array([x[0], x[2]])
 
 
+def have_matching_intervals(t1, t2):
+    def get_interval(trajectory):
+        return np.array([trajectory.start_time(), trajectory.end_time()])
+    overlap = np.mean(get_interval(t1) - get_interval(t2))
+    eps = 1.e-6
+    return np.fabs(overlap) < eps
+
+
 class ForceSensor(LeafSystem):
     def __init__(self, plant):
         LeafSystem.__init__(self)
@@ -137,18 +145,18 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
 
     def CalcTorqueOutput(self, context, output):
-        if self.trajectory is None:
-            trajectory = self.GetInputPort('trajectory').Eval(context)
-            if trajectory.get_number_of_segments() > 0:
-                self.trajectory = trajectory
-                self.qdot_trajectory = self.trajectory.MakeDerivative()
-            else:
-                output.SetFromVector(np.zeros((7),))
-                return
-
         if not self.GetInputPort('switch').Eval(context):
             output.SetFromVector(np.zeros((7),))
             return
+
+        trajectory = self.GetInputPort('trajectory').Eval(context)
+        if 0 == trajectory.get_number_of_segments():
+            output.SetFromVector(np.zeros((7),))
+            return
+        elif self.trajectory is None or not have_matching_intervals(self.trajectory, trajectory):
+            print('updates the trajectory at ctrl')
+            self.trajectory = trajectory
+            self.qdot_trajectory = self.trajectory.MakeDerivative()
 
         current_time = context.get_time()
         q_desired = self.trajectory.value(current_time).T.ravel()
@@ -231,6 +239,10 @@ class HybridCartesianController(LeafSystem):
 
 
     def CalcTorqueOutput(self, context, output):
+        if not self.GetInputPort('switch').Eval(context):
+            output.SetFromVector(np.zeros((7),))
+            return
+
         if self.cart_trajectory is None:
             cart_trajectory = self.GetInputPort('trajectory').Eval(context)
             if cart_trajectory.get_number_of_segments() > 0:
@@ -240,10 +252,6 @@ class HybridCartesianController(LeafSystem):
             else:
                 output.SetFromVector(np.zeros((7),))
                 return
-
-        if not self.GetInputPort('switch').Eval(context):
-            output.SetFromVector(np.zeros((7),))
-            return
 
         current_time = context.get_time()
         state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
