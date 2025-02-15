@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
 import time
-import subprocess
+from multiprocessing import Process
 import typing
 import dataclasses as dc
-
+import os
+import subprocess
 import numpy as np
 from tap import Tap
 import pydot
@@ -57,6 +58,26 @@ from catalog import TrajFollowingJointStiffnessController, HybridCartesianContro
 from planning import MultiTurnPlanner, MakeWsgTrajectory, TurnStage
 from state_monitor import StateMonitor, TerminationCheck
 from visualization_tools import AddMeshcatTriad
+
+
+def detachify(func):
+    """Decorate a function so that its calls are async in a detached process."""
+
+    # create a process fork and run the function
+    def forkify(*args, **kwargs):
+        if os.fork() != 0:
+            return
+        func(*args, **kwargs)
+
+    # wrapper to run the forkified function
+    def wrapper(*args, **kwargs):
+        proc = Process(target=lambda: forkify(*args, **kwargs))
+        proc.start()
+        proc.join()
+        return
+
+    return wrapper
+
 
 def minimalist_traj_vis(traj):
     step = 1. / 33
@@ -836,7 +857,7 @@ def simulate(args: SimArgs):
     while True:
         now = global_context.get_time()
         print(now)
-        new_boudary_time = now + 20.
+        new_boudary_time = now + 5.
         print(f'AdvanceTo {new_boudary_time}')
         simulator.AdvanceTo(new_boudary_time)
         if new_boudary_time >= 40 or TurnStage.FINISH == stage[0]:
@@ -846,10 +867,17 @@ def simulate(args: SimArgs):
 
     meshcat.PublishRecording()
 
-    web_url = meshcat.web_url()
-    print(f'Meshcat is now available at {web_url}')
-    subprocess.call([args.target_browser_for_replay, web_url])
-    time.sleep(30)
+    def raise_browser_for_meshcat(browser, target_url):
+        print(f'Meshcat is now available at {target_url}')
+        extra_opts='--enable-logging=stderr'
+        cmd = [browser, target_url]
+        if browser in ('chrome', 'chromium'):
+            cmd.insert(1, extra_opts)
+        subprocess.call(cmd)
+
+    detachify(raise_browser_for_meshcat)(args.target_browser_for_replay, meshcat.web_url())
+    time.sleep(10)  # sleep long enough for the browser to load the page from this process
+    # needs to wait on 'meshcat-has-loaded' instead
 
 
 if '__main__' == __name__:
