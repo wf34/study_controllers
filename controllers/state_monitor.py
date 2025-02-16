@@ -133,7 +133,6 @@ class TerminationCheck():
         stage = self.planner.GetOutputPort('current_stage').Eval(planner_context)
         self.stage_obj[0] = stage
         if stage == TurnStage.FINISH:
-            print('hi from TerminationCheck')
             return EventStatus.ReachedTermination(self.planner, 'finished the task')
         else:
             return EventStatus.DidNothing()
