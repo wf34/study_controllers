@@ -3,8 +3,11 @@
 import time
 from multiprocessing import Process
 import typing
+import re
+import random
 import dataclasses as dc
 import os
+import string
 import subprocess
 import numpy as np
 from tap import Tap
@@ -860,7 +863,6 @@ def simulate(args: SimArgs):
 
     while True:
         now = global_context.get_time()
-        print(now)
         new_boudary_time = now + 5.
         simulator.AdvanceTo(new_boudary_time)
         if new_boudary_time >= 40 or TurnStage.FINISH == stage[0]:
@@ -868,17 +870,41 @@ def simulate(args: SimArgs):
 
     meshcat.PublishRecording()
 
-    def raise_browser_for_meshcat(browser, target_url):
+    def raise_browser_for_meshcat(browser, target_url, comm_filename):
         print(f'Meshcat is now available at {target_url}')
         extra_opts='--enable-logging=stderr'
         cmd = [browser, target_url]
+
         if browser in ('chrome', 'chromium'):
             cmd.insert(1, extra_opts)
-        subprocess.call(cmd)
+        pattern = re.compile(r'meshcat-has-loaded')
+        process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
+        while True:
+            line = process.stderr.readline()
+            if not line and process.poll() is not None:
+                break
+            line = line.strip()
+            if line:
+                match = pattern.search(line)
+                if match:
+                    print(f"Pattern matched: {line}")
+                    with open(comm_filename, 'w') as the_file:
+                        the_file.write('1')
 
-    detachify(raise_browser_for_meshcat)(args.target_browser_for_replay, meshcat.web_url())
-    time.sleep(10)  # sleep long enough for the browser to load the page from this process
-    # needs to wait on 'meshcat-has-loaded' instead
+
+    characters = string.ascii_letters + string.digits
+    random_string = ''.join(random.choices(characters, k=20))
+    comm_filename = f'/tmp/{random_string}.buf'
+    detachify(raise_browser_for_meshcat)(args.target_browser_for_replay, meshcat.web_url(), comm_filename)
+    time_at_detach = time.time()
+    while time.time() - time_at_detach < 20:
+        if os.path.exists(comm_filename):
+            with open(comm_filename, 'r') as the_file:
+                status = int(the_file.read().strip())
+                if status == 1:
+                    print('load finished')
+                    return
+        time.sleep(0.1)
 
 
 if '__main__' == __name__:
