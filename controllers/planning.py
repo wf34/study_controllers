@@ -25,7 +25,8 @@ def optimize_target_trajectory(keyframes: List[RigidTransform],
                                orientation_constraint_flags: List[bool],
                                duplicate_keyframe_flags: List[bool],
                                plant: MultibodyPlant,
-                               q_nominal: np.array) -> Optional[np.array]:
+                               q_nominal: np.array,
+                               experimental: bool = False) -> Optional[np.array]:
 
     assert len(keyframes) == len(orientation_constraint_flags)
     assert len(keyframes) == len(duplicate_keyframe_flags)
@@ -57,8 +58,11 @@ def optimize_target_trajectory(keyframes: List[RigidTransform],
             is_first = False
         else:
             prog.SetInitialGuess(q_variables, q_keyframes[-1])
-            
-        prog.AddCost(np.square(np.dot(q_variables, q_nominal_full)))
+
+        if experimental:
+            prog.AddCost(np.sum(np.square(q_variables - q_nominal_full)))
+        else:
+            prog.AddCost(np.square(np.dot(q_variables, q_nominal_full)))
 
         offset = np.array([0.01, 0.01, 0.01])
         offset_upper = keyframe.translation() + offset
@@ -84,7 +88,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform],
 
         result = Solve(prog)
         if not result.is_success():
-            print(f'no sol for i={kid}')
+            print(f'no sol:')
             print(result.GetInfeasibleConstraintNames(prog))
             return None
         else:
@@ -302,7 +306,7 @@ class MultiTurnPlanner(LeafSystem):
         iiwa_positions = iiwa_state[:7]
 
         q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
-                                                 self.plant, iiwa_positions)
+                                                 self.plant, iiwa_positions, True)
         if q_keyframes is None:
             print('opt has failed')
             exit(1)
@@ -341,7 +345,7 @@ class MultiTurnPlanner(LeafSystem):
         iiwa_positions = iiwa_state[:7]
 
         q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
-                                                 self.plant, iiwa_positions)
+                                                 self.plant, iiwa_positions, True)
         if q_keyframes is None:
             print('opt has failed')
             exit(1)
@@ -459,9 +463,6 @@ class MultiTurnPlanner(LeafSystem):
 
         else:
             raise Exception('unreachable')
-
-        # this is cheating. maybe try to manage without this:
-        # self.plant.SetPositions(self.plant_context, self.plant.GetModelInstanceByName("iiwa"), trajectory.value(0))
 
 
 def MakeWsgTrajectory() -> Diagram:
