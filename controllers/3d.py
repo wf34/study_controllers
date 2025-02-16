@@ -862,12 +862,9 @@ def simulate(args: SimArgs):
         now = global_context.get_time()
         print(now)
         new_boudary_time = now + 5.
-        print(f'AdvanceTo {new_boudary_time}')
         simulator.AdvanceTo(new_boudary_time)
         if new_boudary_time >= 40 or TurnStage.FINISH == stage[0]:
             break
-        else:
-            print(f'now, at t={now:.1f}, we continue this simulation')
 
     meshcat.PublishRecording()
 
