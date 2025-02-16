@@ -189,8 +189,6 @@ class MultiTurnPlanner(LeafSystem):
             raise Exception('impossible mode', mode)
         else:
             self.mode = mode
-            if mode == 'hybrid':
-                raise Exception('didnt implement yet')
 
         self.DeclareAbstractInputPort(
             "body_poses", AbstractValue.Make([RigidTransform()])
