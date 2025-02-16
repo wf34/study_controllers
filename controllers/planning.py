@@ -1,3 +1,4 @@
+import copy
 from typing import List, Optional, Tuple, Literal
 from enum import Enum
 
@@ -104,12 +105,16 @@ def make_wsg_trajectory(duplicate_flags: List[bool], timestamps: List[float], st
     assert start in ('open', 'closed')
 
     def fix_duplicate_flags(flags):
-        for id_, flag in enumerate(flags):
+        fl = []
+        for flag in flags:
             if flag:
-                flags.insert(id_ + 1, False)
+                fl.extend([False, True])
+            else:
+                fl.append(flag)
+        return fl
 
-    fix_duplicate_flags(duplicate_flags)
-    if len(duplicate_flags) != len(timestamps):
+    flags = fix_duplicate_flags(duplicate_flags)
+    if len(flags) != len(timestamps):
         raise Exception('`duplicate flags` mess-up')
 
     opened = np.array([0.107])
@@ -118,7 +123,7 @@ def make_wsg_trajectory(duplicate_flags: List[bool], timestamps: List[float], st
 
     ind = 0 if start == 'open' else 1
     positions = []
-    for duplicate_flag in duplicate_flags:
+    for duplicate_flag in flags:
         if duplicate_flag:
             ind = (ind + 1) % 2
         positions.append(tictac[ind % 2])
