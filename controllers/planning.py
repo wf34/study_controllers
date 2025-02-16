@@ -1,7 +1,7 @@
 import copy
 from typing import List, Optional, Tuple, Literal
 from enum import Enum
-
+from visualization_tools import AddMeshcatTriad
 import numpy as np
 
 from pydrake.all import (
@@ -171,10 +171,12 @@ class TurnStage(Enum):
 
     def next(self):
         members = list(self.__class__)
+        total = len(members)
         index = members.index(self)
-        index = index + 1
-        if index >= len(members):
-            return None
+        index = (index + 1) % total
+
+        if self.RETRACT == self:
+            return self.APPROACH
         else:
             return members[index]
 
@@ -199,6 +201,7 @@ class MultiTurnPlanner(LeafSystem):
         )
         self.DeclareVectorInputPort("iiwa_state_measured", 14)
 
+        self.turn_start_time = 0.
         self.X_WGinitial = None
         self.X_WVinitial = None
         self.gripper_index = self.plant.GetBodyByName('body').index()
@@ -278,11 +281,11 @@ class MultiTurnPlanner(LeafSystem):
             exit(1)
             return
 
-        valid_timestamps = [0., 2., 4., 6]
-                          # 0, start pose
-                              # 1, reach pre grasp pose
-                                  # 2, reach grasp pose
-                                      # 3, reach closed grip
+        valid_timestamps = np.array([0., 2., 4., 6]) + self.turn_start_time
+                                   # 0, start pose
+                                       # 1, reach pre grasp pose
+                                           # 2, reach grasp pose
+                                               # 3, reach closed grip
 
         if q_keyframes.shape[0] != len(valid_timestamps):
             raise Exception('logical mistake in traj building {}, {}'.format(q_keyframes.shape[0], len(valid_timestamps)))
@@ -312,9 +315,9 @@ class MultiTurnPlanner(LeafSystem):
             exit(1)
             return
 
-        valid_timestamps = [6., 16.]
-                          # 0, reach closed grip
-                              # 1, completed turn
+        valid_timestamps = np.array([6., 16.]) + self.turn_start_time
+                                   # 0, reach closed grip
+                                       # 1, completed turn
         if q_keyframes.shape[0] != len(valid_timestamps):
             raise Exception('logical mistake in traj building {}, {}'.format(q_keyframes.shape[0], len(valid_timestamps)))
 
@@ -351,11 +354,11 @@ class MultiTurnPlanner(LeafSystem):
             exit(1)
             return
 
-        valid_timestamps = [16., 18., 20., 22.]
-                          # 4, completed turn
-                               # 5, reach open grip
-                                    # 6, reach post grasp
-                                         # 7, reach start pose
+        valid_timestamps = np.array([16., 18., 20., 22.]) + self.turn_start_time
+                                   # 4, completed turn
+                                        # 5, reach open grip
+                                             # 6, reach post grasp
+                                                  # 7, reach start pose
         if q_keyframes.shape[0] != len(valid_timestamps):
             raise Exception('logical mistake in traj building {}, {}'.format(q_keyframes.shape[0], len(valid_timestamps)))
 
@@ -391,6 +394,9 @@ class MultiTurnPlanner(LeafSystem):
         next_stage = self.stage.next()
         if not next_stage:
             return
+        if next_stage == TurnStage.RETRACT and self.turn_start_time != 0.:
+            self.stage = TurnStage.FINISH
+            return
 
         if TurnStage.UNSET == next_stage:
             raise Exception('unreachable')
@@ -402,15 +408,14 @@ class MultiTurnPlanner(LeafSystem):
         X_WG = current_poses[self.gripper_index]
         X_WV = current_poses[self.nut_index]
         if TurnStage.APPROACH == next_stage:
-            if self.X_WGinitial is None:
-                self.X_WGinitial = X_WG
-            if self.X_WVinitial is None:
-                self.X_WVinitial = X_WV
+            self.turn_start_time = now
+            self.X_WGinitial = X_WG
+            self.X_WVinitial = X_WV
         elif next_stage in (TurnStage.SCREW, TurnStage.RETRACT):
             assert self.X_WGinitial is not None
             assert self.X_WVinitial is not None
 
-        print('reinitialize_plan? at t=', context.get_time())
+        print('reinitialize_plan? at t=', context.get_time(), 'for stage:', next_stage)
 
         R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([180, 0, 90]))).inverse()
         t_GoalGripper = [0., -0.085, -0.02]
