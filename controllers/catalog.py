@@ -130,8 +130,6 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         self.kp_vec = np.zeros(7,) + kp
         self.kd_vec = np.zeros(7,) + kd
 
-        #self.ctrl = JointStiffnessController()
-
         self.DeclareAbstractInputPort(
             "switch", AbstractValue.Make(bool()))
         self.DeclareAbstractInputPort(
@@ -149,16 +147,16 @@ class TrajFollowingJointStiffnessController(LeafSystem):
             output.SetFromVector(np.zeros((7),))
             return
 
+        current_time = context.get_time()
         trajectory = self.GetInputPort('trajectory').Eval(context)
         if 0 == trajectory.get_number_of_segments():
             output.SetFromVector(np.zeros((7),))
             return
         elif self.trajectory is None or not have_matching_intervals(self.trajectory, trajectory):
-            print('updates the trajectory at ctrl')
+            print(f' >>> updates the trajectory at ctrl t={current_time:.4f}')
             self.trajectory = trajectory
             self.qdot_trajectory = self.trajectory.MakeDerivative()
 
-        current_time = context.get_time()
         q_desired = self.trajectory.value(current_time).T.ravel()
         qdot_desired = self.qdot_trajectory.value(current_time).T.ravel()
 
@@ -243,19 +241,17 @@ class HybridCartesianController(LeafSystem):
             output.SetFromVector(np.zeros((7),))
             return
 
-        if self.cart_trajectory is None:
-            cart_trajectory = self.GetInputPort('trajectory').Eval(context)
-            if cart_trajectory.get_number_of_segments() > 0:
-                self.cart_trajectory = cart_trajectory
-                self.vel_trajectory = self.cart_trajectory.MakeDerivative()
-                self.traj_intervals = np.array([self.cart_trajectory.start_time(), self.cart_trajectory.end_time()])[np.newaxis, :]
-            else:
-                output.SetFromVector(np.zeros((7),))
-                return
-
         current_time = context.get_time()
-        state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
+        cart_trajectory = self.GetInputPort('trajectory').Eval(context)
+        if 0 == cart_trajectory.get_number_of_segments():
+            output.SetFromVector(np.zeros((7),))
+            return
+        elif self.cart_trajectory is None or not have_matching_intervals(self.cart_trajectory, cart_trajectory):
+            print(f' >>> updates the cart-trajectory at ctrl t={current_time:.4f}')
+            self.cart_trajectory = cart_trajectory
+            self.vel_trajectory = self.cart_trajectory.MakeDerivative()
 
+        state_now = self.GetInputPort("iiwa_state_measured").Eval(context)
         q_now = state_now[:7]
         qdot_now = state_now[7:]
 
