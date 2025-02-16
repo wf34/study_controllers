@@ -865,7 +865,7 @@ def simulate(args: SimArgs):
         now = global_context.get_time()
         new_boudary_time = now + 5.
         simulator.AdvanceTo(new_boudary_time)
-        if new_boudary_time >= 40 or TurnStage.FINISH == stage[0]:
+        if new_boudary_time >= 44 or TurnStage.FINISH == stage[0]:
             break
 
     meshcat.PublishRecording()
@@ -897,14 +897,14 @@ def simulate(args: SimArgs):
     comm_filename = f'/tmp/{random_string}.buf'
     detachify(raise_browser_for_meshcat)(args.target_browser_for_replay, meshcat.web_url(), comm_filename)
     time_at_detach = time.time()
-    while time.time() - time_at_detach < 20:
+    load_finished = False
+    while time.time() - time_at_detach < 20. and not load_finished:
         if os.path.exists(comm_filename):
             with open(comm_filename, 'r') as the_file:
                 status = int(the_file.read().strip())
                 if status == 1:
-                    print('load finished')
-                    return
-        time.sleep(0.1)
+                    load_finished = True
+        time.sleep(1.)
 
 
 if '__main__' == __name__:
