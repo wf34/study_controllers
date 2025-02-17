@@ -18,6 +18,7 @@ from pydrake.all import (
     Solve,
     RollPitchYaw,
     TrajectorySource,
+    Meshcat,
 )
 
 
@@ -141,26 +142,30 @@ def make_dummy_wsg_trajectory() -> PiecewisePolynomial:
     return PiecewisePolynomial.FirstOrderHold(ts, wsg_keyframes)
 
 
-def solve_for_grip_direction(X_WVstart: RigidTransform) -> RotationMatrix:
+def solve_for_grip_direction(X_WVstart: RigidTransform, with_vis: bool=False, meshcat: Meshcat=None) -> RotationMatrix:
     possible_nut_rotations = []
-    for ind, alpha in enumerate(np.radians(np.arange(30, 360, 60))):
+    for ind, alpha in enumerate(np.radians(np.arange(-30, 360, 60))):
         R_1 = RollPitchYaw([0, alpha, 0]).ToRotationMatrix() @ X_WVstart.rotation()
         vec = np.degrees(RollPitchYaw(R_1).vector()).tolist()
         vec_with_ind = [ind, np.round(np.degrees(alpha))] + vec
-        #print("// ind={} angle {} RollPitchYaw: {:.1f} {:.1f} {:.1f}".format(*vec_with_ind))
-        #AddMeshcatTriad(meshcat, f'nut-sides-{alpha:.3f}', X_PT=X_curr_rot, opacity=0.33)
+        if with_vis:
+            print("// ind={} angle {} RollPitchYaw: {:.1f} {:.1f} {:.1f}".format(*vec_with_ind))
+            AddMeshcatTriad(meshcat, f'nut-sides-{ind}', X_PT=RigidTransform(R_1, X_WVstart.translation()), opacity=0.33)
         possible_nut_rotations.append(R_1)
 
     arg_min = 0
     least_ang_distance = float('inf')
-    R_WNutInBetterOrientation = RotationMatrix(RollPitchYaw(np.radians([90., 60., 0.])))
+    target_pitch = 50. if with_vis else 60.
+    R_WNutInBetterOrientation = RotationMatrix(RollPitchYaw(np.radians([90., target_pitch, 0.])))
     for ind, R_WNcand in enumerate(possible_nut_rotations):
-        loss = np.linalg.norm(np.degrees(RollPitchYaw(R_WNcand.InvertAndCompose(R_WNutInBetterOrientation)).vector()))
+        R_discrep = RollPitchYaw(R_WNcand.InvertAndCompose(R_WNutInBetterOrientation))
+        loss = np.linalg.norm(np.degrees(R_discrep.vector()))
+        print(ind, loss, R_discrep)
         if loss < least_ang_distance:
             least_ang_distance = loss
             arg_min = ind
-
     return possible_nut_rotations[arg_min]
+
 
 class TurnStage(Enum):
     UNSET = 'unset'
@@ -183,13 +188,17 @@ class TurnStage(Enum):
 
 class MultiTurnPlanner(LeafSystem):
     def __init__(self,
+                 turns: int,
                  mode: Literal['stiffness', 'hybrid'],
-                 plant: MultibodyPlant):
+                 plant: MultibodyPlant,
+                 meshcat: Meshcat):
 
         LeafSystem.__init__(self)
+        self.max_turns_amount = turns
         self.plant = plant
         self.plant_context = plant.CreateDefaultContext()
         self.stage: TurnStage = TurnStage.UNSET
+        self.meshcat = meshcat
 
         if mode not in ['stiffness', 'hybrid']:
             raise Exception('impossible mode', mode)
@@ -202,6 +211,7 @@ class MultiTurnPlanner(LeafSystem):
         self.DeclareVectorInputPort("iiwa_state_measured", 14)
 
         self.turn_start_time = 0.
+        self.turn_counter = 0
         self.X_WGinitial = None
         self.X_WVinitial = None
         self.gripper_index = self.plant.GetBodyByName('body').index()
@@ -394,9 +404,6 @@ class MultiTurnPlanner(LeafSystem):
         next_stage = self.stage.next()
         if not next_stage:
             return
-        if next_stage == TurnStage.RETRACT and self.turn_start_time != 0.:
-            self.stage = TurnStage.FINISH
-            return
 
         if TurnStage.UNSET == next_stage:
             raise Exception('unreachable')
@@ -415,7 +422,10 @@ class MultiTurnPlanner(LeafSystem):
             assert self.X_WGinitial is not None
             assert self.X_WVinitial is not None
 
-        print('reinitialize_plan? at t=', context.get_time(), 'for stage:', next_stage)
+        print('reinitialize_plan? at t=', context.get_time(), 'for stage:', next_stage, 'turn:', self.turn_counter)
+        if next_stage == TurnStage.APPROACH and self.turn_counter == self.max_turns_amount:
+            self.stage = TurnStage.FINISH
+            return
 
         R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([180, 0, 90]))).inverse()
         t_GoalGripper = [0., -0.085, -0.02]
@@ -465,7 +475,7 @@ class MultiTurnPlanner(LeafSystem):
             orientation_flags = [True, True, False]
             duplicate_flags = [True, False, False]
             self.solve_for_retract(keyframes, orientation_flags, duplicate_flags, next_stage, state, context)
-
+            self.turn_counter += 1
         else:
             raise Exception('unreachable')
 
