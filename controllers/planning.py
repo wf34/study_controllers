@@ -27,11 +27,13 @@ def optimize_target_trajectory(keyframes: List[RigidTransform],
                                duplicate_keyframe_flags: List[bool],
                                plant: MultibodyPlant,
                                q_nominal: np.array,
-                               experimental: bool = False) -> Optional[np.array]:
+                               discrepancy_loss: bool = False,
+                               hack: bool = False) -> Optional[np.array]:
 
     assert len(keyframes) == len(orientation_constraint_flags)
     assert len(keyframes) == len(duplicate_keyframe_flags)
     # q_nominal are the current positions
+    print(f'optimize_target_trajectory flags: discrepancy_loss:{discrepancy_loss} hack:{hack}')
     print('||q_nominal|| =', q_nominal.shape, 'q_nominal', q_nominal)
     q_nominal_full = np.zeros(plant.num_positions(),)
     q_nominal_full[:7] = q_nominal
@@ -60,12 +62,16 @@ def optimize_target_trajectory(keyframes: List[RigidTransform],
         else:
             prog.SetInitialGuess(q_variables, q_keyframes[-1])
 
-        if experimental:
+        if discrepancy_loss:
             prog.AddCost(np.sum(np.square(q_variables - q_nominal_full)))
         else:
             prog.AddCost(np.square(np.dot(q_variables, q_nominal_full)))
 
-        offset = np.array([0.01, 0.01, 0.01])
+        if hack:
+            offset = np.array([0.01, 0.01, 0.01])
+        else:
+            offset = np.array([0.03, 0.03, 0.03])
+
         offset_upper = keyframe.translation() + offset
         offset_lower = keyframe.translation() - offset
 
@@ -97,6 +103,7 @@ def optimize_target_trajectory(keyframes: List[RigidTransform],
             if do_kf_duplicate:
                 q_keyframes.append(q_keyframes[-1])
 
+    print("the first configuration:", q_keyframes[1])
     return np.array(q_keyframes)
 
 
@@ -160,7 +167,8 @@ def solve_for_grip_direction(X_WVstart: RigidTransform, with_vis: bool=False, me
     for ind, R_WNcand in enumerate(possible_nut_rotations):
         R_discrep = RollPitchYaw(R_WNcand.InvertAndCompose(R_WNutInBetterOrientation))
         loss = np.linalg.norm(np.degrees(R_discrep.vector()))
-        print(ind, loss, R_discrep)
+        if with_vis:
+            print(ind, loss, R_discrep)
         if loss < least_ang_distance:
             least_ang_distance = loss
             arg_min = ind
@@ -285,7 +293,8 @@ class MultiTurnPlanner(LeafSystem):
         iiwa_positions = iiwa_state[:7]
 
         q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
-                                                 self.plant, iiwa_positions)
+                                                 self.plant, iiwa_positions,
+                                                 hack=self.turn_counter == 1 and next_stage == TurnStage.APPROACH)
         if q_keyframes is None:
             print('opt has failed')
             exit(1)
@@ -319,7 +328,7 @@ class MultiTurnPlanner(LeafSystem):
         iiwa_positions = iiwa_state[:7]
 
         q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
-                                                 self.plant, iiwa_positions, True)
+                                                 self.plant, iiwa_positions, discrepancy_loss=True)
         if q_keyframes is None:
             print('opt has failed')
             exit(1)
@@ -358,7 +367,8 @@ class MultiTurnPlanner(LeafSystem):
         iiwa_positions = iiwa_state[:7]
 
         q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
-                                                 self.plant, iiwa_positions, True)
+                                                 self.plant, iiwa_positions, discrepancy_loss=True,
+                                                 hack=self.turn_counter in (1,2) and next_stage == TurnStage.RETRACT)
         if q_keyframes is None:
             print('opt has failed')
             exit(1)
@@ -472,7 +482,7 @@ class MultiTurnPlanner(LeafSystem):
             X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_pre_grasp_offset
 
             keyframes = [X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, self.X_WGinitial]
-            orientation_flags = [True, True, False]
+            orientation_flags = [True, True, True]
             duplicate_flags = [True, False, False]
             self.solve_for_retract(keyframes, orientation_flags, duplicate_flags, next_stage, state, context)
             self.turn_counter += 1
