@@ -82,33 +82,10 @@ def detachify(func):
     return wrapper
 
 
-def minimalist_traj_vis(traj):
-    step = 1. / 33
-    for ts in np.arange(0, traj.end_time(), step):
-        x = traj.value(ts)
-        print(' '.join(list(map(lambda y: f'{y:.2f}', [ts] + x.ravel().tolist()))))
-
-
-def rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat):
-    step = 1. / 33
-    end_time = step if trajectory is None else trajectory.end_time()
-
-    plant_context = plant.GetMyContextFromRoot(global_context)
+def rich_trajectory_vis(visualizer):
     visualizer_context = visualizer.GetMyContextFromRoot(global_context)
     visualizer.StartRecording(False)
-
-    for ts in np.arange(0, end_time, step):
-        global_context.SetTime(ts)
-        if trajectory is not None:
-            plant.SetPositions(plant_context, plant.GetModelInstanceByName("iiwa"), trajectory.value(ts))
-        if ts == 0:
-            print('but in vis:', plant.GetPositions(plant_context))
-
-        visualizer.ForcedPublish(visualizer_context)
-
-    X_WGcurrent = plant.EvalBodyPoseInWorld(plant_context, plant.GetBodyByName('body'))
-    AddMeshcatTriad(meshcat, 'gripper-at-the-end', X_PT=X_WGcurrent)
-
+    visualizer.ForcedPublish(visualizer_context)
     visualizer.StopRecording()
     visualizer.PublishRecording()
 
@@ -614,6 +591,10 @@ class SimArgs(Tap):
     log_destination: str = '2d-log.json'
     select_controller: typing.Literal['stiffness', 'hybrid'] = 'stiffness'
     use_traj_vis: bool = False
+    turns: int = 1
+
+    def upper_bound_sim_time(self):
+        return self.turns * 22 + .5
 
 
 def MakeHardwareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize_callback: typing.Callable[[Parser], None] = None) -> Diagram:
@@ -716,6 +697,44 @@ def Setup(parser):
     )
 
 
+def raise_browser_for_meshcat(browser, target_url, comm_filename):
+    print(f'Meshcat is now available at {target_url}')
+    extra_opts='--enable-logging=stderr'
+    cmd = [browser, target_url]
+
+    if browser in ('chrome', 'chromium'):
+        cmd.insert(1, extra_opts)
+    pattern = re.compile(r'meshcat-has-loaded')
+    process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
+    while True:
+        line = process.stderr.readline()
+        if not line and process.poll() is not None:
+            break
+        line = line.strip()
+        if line:
+            match = pattern.search(line)
+            if match:
+                print(f"Pattern matched: {line}")
+                with open(comm_filename, 'w') as the_file:
+                    the_file.write('1')
+
+
+def open_browser_link(target_browser_for_replay, meshcat_web_url):
+    characters = string.ascii_letters + string.digits
+    random_string = ''.join(random.choices(characters, k=20))
+    comm_filename = f'/tmp/{random_string}.buf'
+    detachify(raise_browser_for_meshcat)(target_browser_for_replay, meshcat_web_url, comm_filename)
+    time_at_detach = time.time()
+    load_finished = False
+    while time.time() - time_at_detach < 20. and not load_finished:
+        if os.path.exists(comm_filename):
+            with open(comm_filename, 'r') as the_file:
+                status = int(the_file.read().strip())
+                if status == 1:
+                    load_finished = True
+        time.sleep(1.)
+
+
 def simulate(args: SimArgs):
     meshcat = StartMeshcat()
     # meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
@@ -734,7 +753,7 @@ def simulate(args: SimArgs):
 
     wsg_trajectory = builder.AddSystem(MakeWsgTrajectory())
 
-    multi_turn_planner = builder.AddSystem(MultiTurnPlanner(args.select_controller, plant))
+    multi_turn_planner = builder.AddSystem(MultiTurnPlanner(args.turns, args.select_controller, plant, meshcat))
 
     stiff_controller = builder.AddSystem(TrajFollowingJointStiffnessController(plant, 100., 20.))
     hyb_controller = builder.AddSystem(HybridCartesianController(plant, 100., 20., 0.2, 10.))
@@ -836,23 +855,19 @@ def simulate(args: SimArgs):
         simulator = Simulator(diagram)
         global_context = simulator.get_mutable_context()
     else:
-        raise Exception('this codepath gets broken, not sure, if or when will fix')
         global_context = diagram.CreateDefaultContext()
-
-    # minimalist_traj_vis(trajectory)
+        rich_trajectory_vis(visualizer)
+        open_browser_link(args.target_browser_for_replay, meshcat.web_url())
+        return
     #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
     #meshcat.SetTransform("start", X_Wpstart)
     #meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
     #meshcat.SetTransform("end", X_Wpend)
-
-    #if args.use_traj_vis:
-    #    rich_trajectory_vis(trajectory, global_context, plant, visualizer, meshcat)
-    #else:
-        #state_monitor = StateMonitor(args.log_destination, plant, diagram,
-        #                             trajectory if 'stiffness' == args.select_controller else None,
-        #                             cart_trajectory if 'hybrid' == args.select_controller else None,
-        #                             meshcat)
-        #simulator.set_monitor(state_monitor.callback)
+    #state_monitor = StateMonitor(args.log_destination, plant, diagram,
+    #                             trajectory if 'stiffness' == args.select_controller else None,
+    #                             cart_trajectory if 'hybrid' == args.select_controller else None,
+    #                             meshcat)
+    #simulator.set_monitor(state_monitor.callback)
 
     stage = [TurnStage.UNSET]
     termination_check = TerminationCheck(multi_turn_planner, stage)
@@ -863,48 +878,13 @@ def simulate(args: SimArgs):
 
     while True:
         now = global_context.get_time()
-        new_boudary_time = now + 5.
+        new_boudary_time = now + .5
         simulator.AdvanceTo(new_boudary_time)
-        if new_boudary_time >= 44 or TurnStage.FINISH == stage[0]:
+        if new_boudary_time >= args.upper_bound_sim_time() or TurnStage.FINISH == stage[0]:
             break
 
     meshcat.PublishRecording()
-
-    def raise_browser_for_meshcat(browser, target_url, comm_filename):
-        print(f'Meshcat is now available at {target_url}')
-        extra_opts='--enable-logging=stderr'
-        cmd = [browser, target_url]
-
-        if browser in ('chrome', 'chromium'):
-            cmd.insert(1, extra_opts)
-        pattern = re.compile(r'meshcat-has-loaded')
-        process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
-        while True:
-            line = process.stderr.readline()
-            if not line and process.poll() is not None:
-                break
-            line = line.strip()
-            if line:
-                match = pattern.search(line)
-                if match:
-                    print(f"Pattern matched: {line}")
-                    with open(comm_filename, 'w') as the_file:
-                        the_file.write('1')
-
-
-    characters = string.ascii_letters + string.digits
-    random_string = ''.join(random.choices(characters, k=20))
-    comm_filename = f'/tmp/{random_string}.buf'
-    detachify(raise_browser_for_meshcat)(args.target_browser_for_replay, meshcat.web_url(), comm_filename)
-    time_at_detach = time.time()
-    load_finished = False
-    while time.time() - time_at_detach < 20. and not load_finished:
-        if os.path.exists(comm_filename):
-            with open(comm_filename, 'r') as the_file:
-                status = int(the_file.read().strip())
-                if status == 1:
-                    load_finished = True
-        time.sleep(1.)
+    open_browser_link(args.target_browser_for_replay, meshcat.web_url())
 
 
 if '__main__' == __name__:
