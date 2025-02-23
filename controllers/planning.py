@@ -286,7 +286,7 @@ class MultiTurnPlanner(LeafSystem):
         output.set_value(self.stage)
 
 
-    def solve_for_approach(self, keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
+    def solve_for_approach(self, keyframes, orientation_flags, duplicate_flags, next_stage, state, context) -> bool:
         assert TurnStage.APPROACH == next_stage
 
         iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
@@ -297,8 +297,7 @@ class MultiTurnPlanner(LeafSystem):
                                                  hack=self.turn_counter == 1 and next_stage == TurnStage.APPROACH)
         if q_keyframes is None:
             print('opt has failed')
-            exit(1)
-            return
+            return False
 
         valid_timestamps = np.array([0., 2., 4., 6]) + self.turn_start_time
                                    # 0, start pose
@@ -319,6 +318,7 @@ class MultiTurnPlanner(LeafSystem):
         self.stage = next_stage
         for x in ['iiwa_trajectory', 'wsg_trajectory']:
             self.traj_published[x] = False
+        return True
 
 
     def solve_for_turn(self, keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
@@ -331,8 +331,7 @@ class MultiTurnPlanner(LeafSystem):
                                                  self.plant, iiwa_positions, discrepancy_loss=True)
         if q_keyframes is None:
             print('opt has failed')
-            exit(1)
-            return
+            return False
 
         valid_timestamps = np.array([6., 16.]) + self.turn_start_time
                                    # 0, reach closed grip
@@ -358,9 +357,10 @@ class MultiTurnPlanner(LeafSystem):
             raise Exception('unreachable')
 
         self.stage = next_stage
+        return True
 
 
-    def solve_for_retract(self, keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
+    def solve_for_retract(self, keyframes, orientation_flags, duplicate_flags, next_stage, state, context) -> bool:
         assert TurnStage.RETRACT == next_stage
 
         iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
@@ -371,8 +371,7 @@ class MultiTurnPlanner(LeafSystem):
                                                  hack=self.turn_counter in (1,2) and next_stage == TurnStage.RETRACT)
         if q_keyframes is None:
             print('opt has failed')
-            exit(1)
-            return
+            return False
 
         valid_timestamps = np.array([16., 18., 20., 22.]) + self.turn_start_time
                                    # 4, completed turn
@@ -390,6 +389,7 @@ class MultiTurnPlanner(LeafSystem):
         self.stage = next_stage
         for x in ['iiwa_trajectory', 'wsg_trajectory']:
             self.traj_published[x] = False
+        return True
 
 
     def get_latest_current_trajectory_time(self, context, state) -> Optional[float]:
@@ -440,9 +440,11 @@ class MultiTurnPlanner(LeafSystem):
         R_GoalGripper = RotationMatrix(RollPitchYaw(np.radians([180, 0, 90]))).inverse()
         t_GoalGripper = [0., -0.085, -0.02]
         t_GoalGripperPreGrasp = [0., -0.225, -0.02]
+        t_GoalGripperAltPreGrasp = [0., -0.10, 0.10]
         X_GoalGripper = RigidTransform(R_GoalGripper, np.zeros((3,)))
         X_gripper_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripper)
         X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
+        X_alt_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperAltPreGrasp)
 
         #AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
         #AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart)
@@ -458,7 +460,9 @@ class MultiTurnPlanner(LeafSystem):
             keyframes = [self.X_WGinitial, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart]
             orientation_flags = [False, True, True]
             duplicate_flags = [False, False, True]
-            self.solve_for_approach(keyframes, orientation_flags, duplicate_flags, next_stage, state, context)
+            if not self.solve_for_approach(keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
+                self.stage = TurnStage.FINISH
+                return
 
         elif TurnStage.SCREW == next_stage:
             X_WGripperAtTurnStart = X_WG
@@ -474,17 +478,28 @@ class MultiTurnPlanner(LeafSystem):
 
             orientation_flags = [True, True]
             duplicate_flags = [False, False]
-            self.solve_for_turn(keyframes, orientation_flags, duplicate_flags, next_stage, state, context)
+            if not self.solve_for_turn(keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
+                self.stage = TurnStage.FINISH
+                return
 
         elif TurnStage.RETRACT == next_stage:
+            ret_rpy = RollPitchYaw(X_WG.rotation())
+            print('orientation at retract start = ', ret_rpy)
+            ret_pitch_deg = np.degrees(ret_rpy.pitch_angle())
             X_WGripperAtTurnEnd = X_WG
             X_WGripperAtTurnEnd_ = X_WGripperAtTurnEnd @ X_gripper_offset.inverse()
-            X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_pre_grasp_offset
+            X_retract_pre_grasp_offset = X_alt_pre_grasp_offset if ret_pitch_deg > 18. else X_pre_grasp_offset
+            X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_retract_pre_grasp_offset
+
+            AddMeshcatTriad(self.meshcat, f'postgrasp-{self.turn_counter}', X_PT=X_WGripperPostGraspAtTurnEnd)
 
             keyframes = [X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, self.X_WGinitial]
             orientation_flags = [True, True, True]
             duplicate_flags = [True, False, False]
-            self.solve_for_retract(keyframes, orientation_flags, duplicate_flags, next_stage, state, context)
+            if not self.solve_for_retract(keyframes, orientation_flags, duplicate_flags, next_stage, state, context):
+                self.stage = TurnStage.FINISH
+                return
+
             self.turn_counter += 1
         else:
             raise Exception('unreachable')
