@@ -586,7 +586,7 @@ def _ApplyDriverConfigsSim(
         )
 
 class SimArgs(Tap):
-    target_browser_for_replay: str = 'xdg-open'
+    replay_browser: str = 'xdg-open'
     diagram_destination: str = 'diagram.png'
     log_destination: str = '2d-log.json'
     select_controller: typing.Literal['stiffness', 'hybrid'] = 'stiffness'
@@ -719,11 +719,11 @@ def raise_browser_for_meshcat(browser, target_url, comm_filename):
                     the_file.write('1')
 
 
-def open_browser_link(target_browser_for_replay, meshcat_web_url):
+def open_browser_link(replay_browser, meshcat_web_url):
     characters = string.ascii_letters + string.digits
     random_string = ''.join(random.choices(characters, k=20))
     comm_filename = f'/tmp/{random_string}.buf'
-    detachify(raise_browser_for_meshcat)(target_browser_for_replay, meshcat_web_url, comm_filename)
+    detachify(raise_browser_for_meshcat)(replay_browser, meshcat_web_url, comm_filename)
     time_at_detach = time.time()
     load_finished = False
     while time.time() - time_at_detach < 20. and not load_finished:
@@ -857,7 +857,7 @@ def simulate(args: SimArgs):
     else:
         global_context = diagram.CreateDefaultContext()
         rich_trajectory_vis(visualizer)
-        open_browser_link(args.target_browser_for_replay, meshcat.web_url())
+        open_browser_link(args.replay_browser, meshcat.web_url())
         return
     #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
     #meshcat.SetTransform("start", X_Wpstart)
@@ -884,7 +884,7 @@ def simulate(args: SimArgs):
             break
 
     meshcat.PublishRecording()
-    open_browser_link(args.target_browser_for_replay, meshcat.web_url())
+    open_browser_link(args.replay_browser, meshcat.web_url())
 
 
 if '__main__' == __name__:
