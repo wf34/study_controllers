@@ -183,7 +183,7 @@ class TrajFollowingJointStiffnessController(LeafSystem):
         tau += e * self.kp_vec
         tau += e_dot * self.kd_vec
         if self.last_print_time is None or current_time - self.last_print_time > 2.:
-            print('stiff t={:.3f} {}'.format(current_time, tau))
+            print('stiff t={:.3f}\ntau={}'.format(current_time, tau))
             self.last_print_time = current_time
 
         output.SetFromVector(tau)
@@ -196,6 +196,8 @@ class HybridCartesianController(LeafSystem):
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
         self.X_Wshelf = None
+        self.nominal_q = None
+        self.prev_switch = False
 
         self.cart_trajectory = None
         self.vel_trajectory = None
@@ -237,14 +239,20 @@ class HybridCartesianController(LeafSystem):
 
 
     def CalcTorqueOutput(self, context, output):
-        if not self.GetInputPort('switch').Eval(context):
-            output.SetFromVector(np.zeros((7),))
-            return
-
         current_time = context.get_time()
+        switch = self.GetInputPort('switch').Eval(context)
+        if not switch:
+            output.SetFromVector(np.zeros((7),))
+            self.prev_switch = switch
+            return
+        elif not self.prev_switch:
+            self.nominal_q = self.GetInputPort("iiwa_state_measured").Eval(context)[:7]
+            print(f'hybrid\'s nominal={self.nominal_q} at={current_time:.2f}\n')
+
         cart_trajectory = self.GetInputPort('trajectory').Eval(context)
         if 0 == cart_trajectory.get_number_of_segments():
             output.SetFromVector(np.zeros((7),))
+            self.prev_switch = switch
             return
         elif self.cart_trajectory is None or not have_matching_intervals(self.cart_trajectory, cart_trajectory):
             print(f' >>> updates the cart-trajectory at ctrl t={current_time:.4f}')
@@ -267,7 +275,7 @@ class HybridCartesianController(LeafSystem):
         tau -= bias
         tau = tau[:7]
 
-        J_G = self._plant.CalcJacobianSpatialVelocity(
+        J_G_complete = self._plant.CalcJacobianSpatialVelocity(
             self._plant_context,
             JacobianWrtVariable.kQDot,
             self._G,
@@ -276,7 +284,8 @@ class HybridCartesianController(LeafSystem):
             self._W,
         )
                          # ry, tx, tz
-        J_G = J_G[np.ix_([1, 3, 5], self._joint_indices)]
+        J_G = J_G_complete[np.ix_([1, 3, 5], self._joint_indices)]
+        J_G_iiwa = J_G_complete[np.ix_(list(range(6)), self._joint_indices)]
 
         # cartesian pos control
         pose_desired = self.cart_trajectory.GetPose(current_time)
@@ -307,8 +316,8 @@ class HybridCartesianController(LeafSystem):
         q_e_tang = J_G.T @ te_WG
         qdot_e_tang = J_G.T @ ve_WG
 
-        tau += q_e_tang * self.kp_tang_vec
-        tau += qdot_e_tang * self.kd_tang_vec
+        # tau += q_e_tang * self.kp_tang_vec
+        # tau += qdot_e_tang * self.kd_tang_vec
 
         # force control
         m_measured = self.GetInputPort('ee_force_measured').Eval(context)[0]
@@ -323,8 +332,15 @@ class HybridCartesianController(LeafSystem):
         tau += e_tau * self.kf_norm_vec
         tau += ve_norm_tau * self.kfd_norm_vec
 
+        # joint centering; J_G_iiwa in [6 x 7]
+        eps_2nd = 5.e-2
+        P = np.identity(7) - np.linalg.pinv(J_G_iiwa) @ J_G_iiwa
+        joint_centering = eps_2nd * P.dot( 100 * (self.nominal_q - q_now) - 20 * qdot_now)
+        tau += joint_centering
+
         if self.last_print_time is None or current_time - self.last_print_time > 2.:
-            print('hybrid t={:.3f} {}'.format(current_time, tau))
+            print('hybrid t={:.3f}\ntau={}\n jc={}\n'.format(current_time, tau, joint_centering))
             self.last_print_time = current_time
 
+        self.prev_switch = switch
         output.SetFromVector(tau)
