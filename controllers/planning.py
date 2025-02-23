@@ -186,11 +186,13 @@ class TurnStage(Enum):
         members = list(self.__class__)
         total = len(members)
         index = members.index(self)
-        index = (index + 1) % total
 
         if self.RETRACT == self:
             return self.APPROACH
+        elif self.FINISH == self:
+            return self.FINISH
         else:
+            index = (index + 1) % total
             return members[index]
 
 
@@ -202,6 +204,7 @@ class MultiTurnPlanner(LeafSystem):
                  meshcat: Meshcat):
 
         LeafSystem.__init__(self)
+        self.set_name('MultiTurnPlanner')
         self.max_turns_amount = turns
         self.plant = plant
         self.plant_context = plant.CreateDefaultContext()
@@ -227,6 +230,7 @@ class MultiTurnPlanner(LeafSystem):
 
         self.DeclareAbstractOutputPort("stiffness_controller_switch", lambda: AbstractValue.Make(bool()), self.set_stiffness_switch)
         self.DeclareAbstractOutputPort("hybrid_controller_switch", lambda: AbstractValue.Make(bool()), self.set_hybrid_switch)
+        self.DeclareAbstractOutputPort("turn", lambda: AbstractValue.Make(int()), self.set_turn_count)
 
         self.iiwa_trajectory_index = int(self.DeclareAbstractState(
             AbstractValue.Make(PiecewisePolynomial())))
@@ -280,6 +284,10 @@ class MultiTurnPlanner(LeafSystem):
     def set_hybrid_switch(self, context, output):
         is_force = not self.get_stiffness_switch()
         output.set_value(is_force)
+
+
+    def set_turn_count(self, context, output):
+        output.set_value(self.turn_counter)
 
 
     def calc_current_stage(self, context, output):
@@ -491,7 +499,7 @@ class MultiTurnPlanner(LeafSystem):
             X_retract_pre_grasp_offset = X_alt_pre_grasp_offset if ret_pitch_deg > 18. else X_pre_grasp_offset
             X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_retract_pre_grasp_offset
 
-            AddMeshcatTriad(self.meshcat, f'postgrasp-{self.turn_counter}', X_PT=X_WGripperPostGraspAtTurnEnd)
+            # AddMeshcatTriad(self.meshcat, f'postgrasp-{self.turn_counter}', X_PT=X_WGripperPostGraspAtTurnEnd)
 
             keyframes = [X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, self.X_WGinitial]
             orientation_flags = [True, True, True]

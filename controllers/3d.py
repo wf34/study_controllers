@@ -59,7 +59,7 @@ from directives_tree import DirectivesTree
 from resource_loader import get_resource_path, LoadScenario, Scenario, TIME_STEP
 from catalog import TrajFollowingJointStiffnessController, HybridCartesianController, ForceSensor
 from planning import MultiTurnPlanner, MakeWsgTrajectory, TurnStage
-from state_monitor import StateMonitor, TerminationCheck
+from state_monitor import StateMonitor
 from visualization_tools import AddMeshcatTriad
 
 
@@ -588,7 +588,7 @@ def _ApplyDriverConfigsSim(
 class SimArgs(Tap):
     replay_browser: str = 'xdg-open'
     diagram_destination: str = 'diagram.png'
-    log_destination: str = '2d-log.json'
+    log_destination: str = 'log.json'
     select_controller: typing.Literal['stiffness', 'hybrid'] = 'stiffness'
     use_traj_vis: bool = False
     turns: int = 1
@@ -859,20 +859,10 @@ def simulate(args: SimArgs):
         rich_trajectory_vis(visualizer)
         open_browser_link(args.replay_browser, meshcat.web_url())
         return
-    #meshcat.SetObject("start", Sphere(0.03), rgba=Rgba(.9, .1, .1, .7))
-    #meshcat.SetTransform("start", X_Wpstart)
-    #meshcat.SetObject("end", Sphere(0.03), rgba=Rgba(.1, .9, .1, .7))
-    #meshcat.SetTransform("end", X_Wpend)
-    #state_monitor = StateMonitor(args.log_destination, plant, diagram,
-    #                             trajectory if 'stiffness' == args.select_controller else None,
-    #                             cart_trajectory if 'hybrid' == args.select_controller else None,
-    #                             meshcat)
-    #simulator.set_monitor(state_monitor.callback)
 
     stage = [TurnStage.UNSET]
-    termination_check = TerminationCheck(multi_turn_planner, stage)
-    simulator.set_monitor(termination_check.callback)
-
+    state_monitor = StateMonitor(args.log_destination, diagram, stage)
+    simulator.set_monitor(state_monitor.callback)
     simulator.Initialize()
     meshcat.StartRecording(set_visualizations_while_recording=False)
 
@@ -885,7 +875,6 @@ def simulate(args: SimArgs):
 
     meshcat.PublishRecording()
     open_browser_link(args.replay_browser, meshcat.web_url())
-
 
 if '__main__' == __name__:
     simulate(SimArgs().parse_args())
