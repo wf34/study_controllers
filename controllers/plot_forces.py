@@ -4,15 +4,22 @@ import os
 import json
 import typing
 
+import numpy as np
 from tap import Tap
 from matplotlib import pyplot as plt
 
 from state_monitor import Datum
 
+from pydrake.all import (
+    RigidTransform,
+    RotationMatrix,
+)
+
 class PlotterArgs(Tap):
     input_files: typing.List[str]
     labels: typing.List[str] = []
-    plot_what: typing.Literal['pe', 'f', 'm']
+    mode: typing.Literal['pe', 'f', 'p']
+    sparse_load: bool = False
 
     def process_args(self):
         if len(list(map(os.path.isfile, self.input_files))) != len(self.input_files):
@@ -20,57 +27,69 @@ class PlotterArgs(Tap):
         if len(self.labels) != 0 and len(self.input_files) != len(self.labels):
             raise Exception('mismatch in labels: {} {}'.format(len(self.input_files), len(self.labels)))
         if len(self.labels) == 0:
-            self.labels = list(map(str, range(len(self.input_files))))
+            self.labels = list(map(lambda x: os.path.basename(x)[:-5], self.input_files))
 
 
-def load_datums(input_file: str):
+def load_datums(input_file: str, do_sparse_load: bool = False):
     datums = []
     with open(input_file, 'r') as the_file:
         file_contents = the_file.read()
-        file_contents = file_contents[:-1] + ']'
         json_struct = json.loads(file_contents)
+        datums_cnt = 0
         for datum_raw in json_struct:
-            datums.append(Datum(**datum_raw))
+            if not do_sparse_load or 0 == datums_cnt % 10:
+                datums.append(Datum(**datum_raw))
+            datums_cnt += 1
     return datums
 
-def plot(args: PlotterArgs):
-    per_file_datums = list(map(load_datums, args.input_files))
 
-    NUM_COLORS = len(args.input_files)
+def plot(args: PlotterArgs):
+    per_file_datums = list(map(lambda x: load_datums(x, args.sparse_load), args.input_files))
+    
+    trajectories_amount = len(per_file_datums)
+    print(trajectories_amount, len(args.labels), '/////')
 
     fig = plt.figure()
-    ax = fig.subplots(nrows=1, ncols=2)
+    ax = fig.subplots(nrows=1, ncols=1)
+    ax_secondary = ax.twinx()
+    ax_secondary.yaxis.set_ticks(np.arange(0, 4))
 
-    cm = plt.get_cmap('flag')#gist_rainbow')
-    for i in range(2):
-        ax[i].set_prop_cycle(color=[cm(1.*i/NUM_COLORS) for i in range(NUM_COLORS)])
+    NUM_COLORS = trajectories_amount
+    cm = plt.get_cmap('flag')
+    ax.set_prop_cycle(color=[cm(1.*i/NUM_COLORS) for i in range(NUM_COLORS)])
 
-    label_prefix = args.plot_what
-    for datums, label_, w in zip(per_file_datums, args.labels, [2, 1]):
+    is_first = True
+    lines = []
+    for datums, label in zip(per_file_datums, args.labels):
         t = []
-        pe_x = []
-        pe_z = []
-        m = []
-
+        tn = []
+        pitches = []
         for d in datums:
             t.append(d.time)
-            if args.plot_what == 'pe':
-                pe_x.append(d.pe_s.x)
-                pe_z.append(d.pe_s.z +0.11826275 if label_ == 'hybrid' else 0.)
-            elif args.plot_what == 'f':
-                pe_x.append(d.f_s.x)
-                pe_z.append(d.f_s.z)
-            elif args.plot_what == 'm':
-                pe_x.append(d.moment)
-                pe_z.append(d.pitch_angle)
+            tn.append(d.turn)
+            pitches.append(d.valve_pitch_angle)
 
-        ax[0].plot(t, pe_x, linewidth=w, label=label_ + f'/{label_prefix}_x')
-        ax[1].plot(t, pe_z, linewidth=w, label=label_ + f'/{label_prefix}_z')
+        if is_first:
+            l1 = ax_secondary.plot(t, tn, label='turn count', color='k')
+            is_first = False
+            lines.extend(l1)
 
-    for i in range(2):
-        ax[i].legend()
-        ax[i].axhline(0., color='k', linestyle='-.', alpha=1)
+        if 'pe' == args.mode:
+            pass
+        elif 'f' == args.mode:
+            pass
+        elif 'p' == args.mode:
+            l2 = ax.plot(t, pitches, label=f'{label}/pitch')
+            lines.extend(l2)
+        else:
+            raise Exception('unreachable')
 
+    for offset in range(3):
+        real_offset = offset * 22
+        ax.axvline(real_offset + 6., color='red', linestyle='-.', alpha=1)
+        ax.axvline(real_offset + 16., color='green', linestyle='-.', alpha=1)
+
+    ax.legend(lines, [l.get_label() for l in lines])
     plt.show()
 
 
