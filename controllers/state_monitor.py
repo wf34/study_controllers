@@ -69,11 +69,12 @@ class DumpTransform(BaseModel):
 
 class Datum(BaseModel):
     time: float
-    Xee_desired_W: DumpTransform
-    Xee_observed_W: DumpTransform
-    force_sensed: Vector3
+    Xee_desired_W: Optional[DumpTransform] = None
+    Xee_observed_W: Optional[DumpTransform] = None
+    force_sensed: Optional[Vector3] = None
     valve_pitch_angle: float
     turn: int
+    stage: TurnStage
 
 
 class StateMonitor:
@@ -159,8 +160,9 @@ class StateMonitor:
     def callback(self, root_context):
         self.keep_trajectories_up_to_date(root_context)
         stage = self.get_stage(root_context)
-        if TurnStage.SCREW == stage:
+        if stage in (TurnStage.APPROACH, TurnStage.SCREW, TurnStage.RETRACT):
             station_context = self._station.GetMyContextFromRoot(root_context)
+            ts = root_context.get_time()
             turn = self.get_turn(root_context)
             poses = self._station.GetOutputPort('body_poses').Eval(station_context)
             X_WV = poses[self._valve_body_instance]
@@ -174,13 +176,17 @@ class StateMonitor:
 
             sensor_context = self.force_sensor.GetMyContextFromRoot(root_context)
             sensed_reaction_force = self.force_sensor.GetOutputPort('sensed_force_out').Eval(sensor_context)
+            if stage == TurnStage.SCREW:
+                self.datums.append(Datum(time=ts,
+                                         Xee_desired_W=DumpTransform.instantiate_from_rt(pose_desired),
+                                         Xee_observed_W= DumpTransform.instantiate_from_rt(pose_measured),
+                                         force_sensed=Vector3.instantiate_from_arr(sensed_reaction_force),
+                                         valve_pitch_angle=valve_pitch_angle,
+                                         turn=turn,
+                                         stage=stage))
+            else:
+                self.datums.append(Datum(time=ts, valve_pitch_angle=valve_pitch_angle, turn=turn, stage=stage))
 
-            self.datums.append(Datum(time=root_context.get_time(),
-                                     Xee_desired_W=DumpTransform.instantiate_from_rt(pose_desired),
-                                     Xee_observed_W= DumpTransform.instantiate_from_rt(pose_measured),
-                                     force_sensed=Vector3.instantiate_from_arr(sensed_reaction_force),
-                                     valve_pitch_angle=valve_pitch_angle,
-                                     turn=turn))
             return EventStatus.DidNothing()
 
         elif TurnStage.FINISH == stage:

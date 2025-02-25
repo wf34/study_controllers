@@ -588,7 +588,7 @@ def _ApplyDriverConfigsSim(
 class SimArgs(Tap):
     replay_browser: str = 'xdg-open'
     diagram_destination: str = 'diagram.png'
-    log_destination: str = 'log.json'
+    log_destination: typing.Optional[str] = None
     select_controller: typing.Literal['stiffness', 'hybrid'] = 'stiffness'
     use_traj_vis: bool = False
     turns: int = 1
