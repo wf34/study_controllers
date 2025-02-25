@@ -454,16 +454,15 @@ class MultiTurnPlanner(LeafSystem):
         X_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperPreGrasp)
         X_alt_pre_grasp_offset = RigidTransform(RotationMatrix.Identity(), t_GoalGripperAltPreGrasp)
 
-        #AddMeshcatTriad(meshcat, 'pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart)
-        #AddMeshcatTriad(meshcat, 'gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart)
-        #AddMeshcatTriad(meshcat, 'gripper-at-final-valve', X_PT=X_WGripperAtTurnEnd)
-        #AddMeshcatTriad(meshcat, 'postgrasp-at-final-valve', X_PT=X_WGripperPostGraspAtTurnEnd)
-
         if TurnStage.APPROACH == next_stage:
             R_WVpreferred = solve_for_grip_direction(X_WV)
             X_WGripperAtTurnStart_ = RigidTransform(R_WVpreferred, X_WV.translation()) @ X_GoalGripper
             X_WGripperAtTurnStart = X_WGripperAtTurnStart_ @ X_gripper_offset
             X_WGripperPreGraspAtTurnStart = X_WGripperAtTurnStart_ @ X_pre_grasp_offset
+
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-nominal', X_PT=self.X_WGinitial, opacity=0.33)
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-pregrasp-at-initial-valve', X_PT=X_WGripperPreGraspAtTurnStart, opacity=0.66)
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-gripper-at-initial-valve', X_PT=X_WGripperAtTurnStart, opacity=1.00)
 
             keyframes = [self.X_WGinitial, X_WGripperPreGraspAtTurnStart, X_WGripperAtTurnStart]
             orientation_flags = [False, True, True]
@@ -483,6 +482,8 @@ class MultiTurnPlanner(LeafSystem):
             X_WGripperAtTurnEnd = X_WGripperAtTurnEnd_ @ X_gripper_offset
 
             keyframes = [X_WGripperAtTurnStart, X_WGripperAtTurnEnd]
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-preturn', X_PT=X_WGripperAtTurnStart, opacity=0.5)
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-postturn', X_PT=X_WGripperAtTurnEnd, opacity=1.0)
 
             orientation_flags = [True, True]
             duplicate_flags = [False, False]
@@ -499,7 +500,9 @@ class MultiTurnPlanner(LeafSystem):
             X_retract_pre_grasp_offset = X_alt_pre_grasp_offset if ret_pitch_deg > 18. else X_pre_grasp_offset
             X_WGripperPostGraspAtTurnEnd = X_WGripperAtTurnEnd_ @ X_retract_pre_grasp_offset
 
-            # AddMeshcatTriad(self.meshcat, f'postgrasp-{self.turn_counter}', X_PT=X_WGripperPostGraspAtTurnEnd)
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-turn-end', X_PT=X_WGripperAtTurnEnd, opacity=.33)
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-postgrasp', X_PT=X_WGripperPostGraspAtTurnEnd, opacity=.66)
+            #AddMeshcatTriad(self.meshcat, f'{self.turn_counter}-nominal', X_PT=self.X_WGinitial, opacity=1.0)
 
             keyframes = [X_WGripperAtTurnEnd, X_WGripperPostGraspAtTurnEnd, self.X_WGinitial]
             orientation_flags = [True, True, True]
