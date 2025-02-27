@@ -43,7 +43,7 @@ def load_datums(input_file: str, do_sparse_load: bool = False):
         json_struct = json.loads(file_contents)
         datums_cnt = 0
         for datum_raw in json_struct:
-            if not do_sparse_load or 0 == datums_cnt % 25:
+            if not do_sparse_load or 0 == datums_cnt % 400:
                 datums.append(Datum(**datum_raw))
             datums_cnt += 1
     return datums
@@ -76,12 +76,23 @@ def plot(args: PlotterArgs):
         tn_by_stage = {}
         pitches = []
         Ms = []
+        t_des = []
+        t_mes = []
+        q_des = []
+        q_mes = []
+
         for d in datums:
             t.append(d.time)
             if d.force_sensed is not None:
                 Ms.append(d.force_sensed.x)
             else:
                 Ms.append(None)
+
+            assert d.Xee_desired_W is not None and d.Xee_observed_W is not None
+            t_des.append(d.Xee_desired_W.translation.to_np())
+            t_mes.append(d.Xee_observed_W.translation.to_np())
+            q_des.append(d.Xee_desired_W.rotation.to_drake_q())
+            q_mes.append(d.Xee_observed_W.rotation.to_drake_q())
 
             t_by_stage.setdefault(d.stage, []).append(d.time)
             tn_by_stage.setdefault(d.stage, []).append(d.turn + 1 if d.stage != TurnStage.RETRACT else d.turn)
@@ -91,8 +102,36 @@ def plot(args: PlotterArgs):
             else:
                 pitches.append(pitch_for_vis(d.valve_pitch_angle))
 
+
         if 'pe' == args.mode:
-            pass
+            if first_trajectory:
+                for stage, c in zip([TurnStage.APPROACH, TurnStage.SCREW, TurnStage.RETRACT],
+                                    ['orange', 'yellow', 'cyan']):
+                                    #[(1, .49, 0.), (1, 1, 0), (0., .54, .54)]):
+                    l_sec = ax_secondary.scatter(t_by_stage[stage], tn_by_stage[stage], color=c, s=2**8, alpha=0.33, edgecolors='none')
+                    lines.append(l_sec)
+                    labels.append(f'{stage.value} at turn #')
+
+                first_trajectory = False
+
+            t_des = np.array(t_des)
+            t_mes = np.array(t_mes)
+            err = np.square(t_des - t_mes)
+            err = np.sqrt(np.sum(err, axis=1))
+
+            q_err = []
+            for qd, qm in zip(q_des, q_mes):
+                q_rez = qd.inverse().multiply(qm)
+                qnor = np.linalg.norm(q_rez.wxyz())
+                q_err.append(q_rez.w() / qnor)
+                assert -1. <= q_err[-1] <= 1.
+
+            ang_err = np.degrees(np.abs(np.arccos(q_err))) * 2.
+
+            lf = ax.plot(t, err, label=label, color=mc)
+            lines.extend(lf)
+            labels.append(lf[0].get_label())
+
         elif 'f' == args.mode:
             if True:
                 inds = []
@@ -150,14 +189,19 @@ def plot(args: PlotterArgs):
         else:
             raise Exception('unreachable')
 
-    if args.mode == 'p':
+    if args.mode in ('p', 'pe'):
         ax.set_zorder(ax_secondary.get_zorder() + 1)
         ax.patch.set_visible(False)
         ax_secondary.set_ylabel('Turn #')
-        ax.set_ylabel('Nut Turning Progress, degrees')
+        if args.mode == 'p':
+            ax.set_ylabel('Nut Turning Progress, degrees')
+        elif args.mode == 'pe':
+            #ax.set_ylim(0., 30.)
+            #ax.set_ylabel('Planned Trajectory Tracking Error, degrees')
+            ax.set_ylabel('Planned Trajectory Tracking Error, meters')
     elif args.mode == 'f':
         ax.set_ylabel('Nut-Gripper Average Contact Moment, N•m')
-    ax.legend(lines, labels)
+    ax.legend(lines, labels, loc = "upper left")
     ax.set_xlabel('Simulation Time, seconds')
     plt.tight_layout()
 

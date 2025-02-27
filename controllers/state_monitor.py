@@ -13,11 +13,12 @@ from pydrake.all import (
     RigidTransform,
     RollPitchYaw,
     RotationMatrix,
+    Quaternion,
 )
 
 import numpy as np
 
-from catalog import get_transl2d_from_transform, get_rot2d_from_transform, have_matching_intervals
+from catalog import have_matching_intervals
 from planning import MultiTurnPlanner, TurnStage
 
 def custom_encoder(**kwargs):
@@ -43,6 +44,10 @@ class Vector3(BaseModel):
 
         return Vector3(**dct)
 
+    def to_np(self):
+        return np.array([self.x, self.y, self.z])
+
+
 class Quat(BaseModel):
     w: float
     x: float
@@ -56,6 +61,9 @@ class Quat(BaseModel):
             dct[n] = getattr(vec, n)()
 
         return Quat(**dct)
+
+    def to_drake_q(self) -> Quaternion:
+        return Quaternion(self.w, self.x, self.y, self.z)
 
 
 class DumpTransform(BaseModel):
@@ -171,9 +179,6 @@ class StateMonitor:
             pose_desired = self.get_goal_pose(root_context)
             pose_measured = poses[self._gripper_body_instance]
 
-            pd_WG = get_transl2d_from_transform(pose_desired)
-            pm_WG = get_transl2d_from_transform(pose_measured)
-
             sensor_context = self.force_sensor.GetMyContextFromRoot(root_context)
             sensed_reaction_force = self.force_sensor.GetOutputPort('sensed_force_out').Eval(sensor_context)
             if stage == TurnStage.SCREW:
@@ -185,7 +190,12 @@ class StateMonitor:
                                          turn=turn,
                                          stage=stage))
             else:
-                self.datums.append(Datum(time=ts, valve_pitch_angle=valve_pitch_angle, turn=turn, stage=stage))
+                self.datums.append(Datum(time=ts,
+                                         Xee_desired_W=DumpTransform.instantiate_from_rt(pose_desired),
+                                         Xee_observed_W= DumpTransform.instantiate_from_rt(pose_measured),
+                                         valve_pitch_angle=valve_pitch_angle,
+                                         turn=turn,
+                                         stage=stage))
 
             return EventStatus.DidNothing()
 
