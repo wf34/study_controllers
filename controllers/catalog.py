@@ -15,6 +15,7 @@ from pydrake.all import (
     SpatialForce,
     SpatialVelocity
 )
+from resource_loader import TIME_STEP
 
 
 def get_rot2d_from_transform(X_Wo: RigidTransform) -> np.array:
@@ -137,17 +138,26 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         self.trajectory = None
         self.qdot_trajectory = None
+        self.total_work = None
 
         self.DeclareVectorInputPort("iiwa_state_measured", 14)
         self.DeclareVectorOutputPort("iiwa_torque_cmd", 7, self.CalcTorqueOutput)
 
 
     def CalcTorqueOutput(self, context, output):
-        if not self.GetInputPort('switch').Eval(context):
+        switch = self.GetInputPort('switch').Eval(context)
+        if not switch:
             output.SetFromVector(np.zeros((7),))
             return
 
         current_time = context.get_time()
+        if self.total_work is None and 6. <= current_time and current_time < 16.:
+            self.total_work = 0.
+
+        if current_time >= 16. and self.total_work is not None:
+            print('just finished turn: total_work=', self.total_work)
+            self.total_work = None
+
         trajectory = self.GetInputPort('trajectory').Eval(context)
         if 0 == trajectory.get_number_of_segments():
             output.SetFromVector(np.zeros((7),))
@@ -182,8 +192,13 @@ class TrajFollowingJointStiffnessController(LeafSystem):
 
         tau += e * self.kp_vec
         tau += e_dot * self.kd_vec
+
+        work_increment = np.dot(tau, qdot_now) * TIME_STEP
+        if self.total_work is not None:
+            self.total_work += work_increment
+
         if self.last_print_time is None or current_time - self.last_print_time > 2.:
-            print('stiff t={:.3f}\ntau={}'.format(current_time, tau))
+            print('stiff t={:.3f}\ntau={}\nwi={}\n'.format(current_time, tau, work_increment))
             self.last_print_time = current_time
 
         output.SetFromVector(tau)
@@ -201,6 +216,7 @@ class HybridCartesianController(LeafSystem):
 
         self.cart_trajectory = None
         self.vel_trajectory = None
+        self.total_work = 0.
 
         self.kp_tang_vec = np.zeros(7,) + kp_tang
         self.kd_tang_vec = np.zeros(7,) + kd_tang
@@ -248,6 +264,7 @@ class HybridCartesianController(LeafSystem):
         elif not self.prev_switch:
             self.nominal_q = self.GetInputPort("iiwa_state_measured").Eval(context)[:7]
             print(f'hybrid\'s nominal={self.nominal_q} at={current_time:.2f}\n')
+            self.total_work = 0.
 
         cart_trajectory = self.GetInputPort('trajectory').Eval(context)
         if 0 == cart_trajectory.get_number_of_segments():
@@ -338,8 +355,11 @@ class HybridCartesianController(LeafSystem):
         joint_centering = eps_2nd * P.dot( 100 * (self.nominal_q - q_now) - 20 * qdot_now)
         tau += joint_centering
 
+        work_increment = np.dot(tau, qdot_now) * TIME_STEP
+        if 6. <= current_time and current_time < 16. and self.total_work is not None:
+            self.total_work += np.abs(work_increment)
         if self.last_print_time is None or current_time - self.last_print_time > 2.:
-            print('hybrid t={:.3f}\ntau={}\n jc={}\n'.format(current_time, tau, joint_centering))
+            print('hybrid t={:.3f}\ntau={}\n jc={}\n wi={}\n'.format(current_time, tau, joint_centering, work_increment))
             self.last_print_time = current_time
 
         self.prev_switch = switch
