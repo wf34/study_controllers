@@ -34,11 +34,11 @@ directives:
 - add_model:
     name: valve_table
     file: package://controllers/extra_heavy_duty_table_surface_only_collision.sdf
-- add_weld:
-    parent: world
-    child: valve_table::link
-    X_PC:
-        translation: [.75, 0.210375, -0.7645]
+ #- add_weld:
+ #    parent: world
+ #    child: valve_table::link
+ #    X_PC:
+ #        translation: [.75, 0.210375, -0.7645]
 - add_model:
     name: post
     file: package://controllers/nondescript_post.sdf

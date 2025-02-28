@@ -3,6 +3,7 @@
 import time
 from multiprocessing import Process
 import typing
+import copy
 import re
 import random
 import dataclasses as dc
@@ -10,6 +11,7 @@ import os
 import string
 import subprocess
 import numpy as np
+import numpy.random
 from tap import Tap
 import pydot
 
@@ -33,10 +35,12 @@ from pydrake.all import (
     ModelDirectives,
     ModelInstanceIndex,
     ModelInstanceInfo,
+    InverseKinematics,
     MeshcatVisualizer,
     LeafSystem,
     MakeMultibodyStateToWsgStateSystem,
     Simulator,
+    Solve,
     Meshcat,
     StartMeshcat,
     MultibodyPlant,
@@ -592,12 +596,14 @@ class SimArgs(Tap):
     select_controller: typing.Literal['stiffness', 'hybrid'] = 'stiffness'
     use_traj_vis: bool = False
     turns: int = 1
+    noise_level: typing.Optional[float] = None
+    seed: int = 34
 
     def upper_bound_sim_time(self):
         return self.turns * 22 + .5
 
 
-def MakeHardwareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize_callback: typing.Callable[[Parser], None] = None) -> Diagram:
+def MakeHardwareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize_callback: typing.Callable[[Parser], None] = None, noise_level = None) -> Diagram:
     robot_builder = RobotDiagramBuilder(time_step=TIME_STEP)
     builder = robot_builder.builder()
     sim_plant = robot_builder.plant()
@@ -623,6 +629,13 @@ def MakeHardwareStation(scenario: Scenario, meshcat: Meshcat, parser_prefinalize
         package_xmls=[],
         builder=builder,
     )
+
+    _table = sim_plant.GetModelInstanceByName('valve_table')
+    X_WN = RigidTransform(RotationMatrix(), [.75, 0.210375, -0.7645])
+    random_offset = np.random.uniform(low=-noise_level, high=noise_level, size=(3))
+    X_WN.set_translation(X_WN.translation() + random_offset)
+    table_body = sim_plant.GetRigidBodyByName('link', _table)
+    sim_plant.WeldFrames(sim_plant.world_frame(), table_body.body_frame(), X_WN)
 
     sim_plant.Finalize()
 
@@ -736,13 +749,16 @@ def open_browser_link(replay_browser, meshcat_web_url):
 
 
 def simulate(args: SimArgs):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
     meshcat = StartMeshcat()
     # meshcat.Set2dRenderMode(xmin=-0.25, xmax=1.5, ymin=-0.1, ymax=1.3)
 
     builder = DiagramBuilder()
 
     scenario = LoadScenario(filename=get_resource_path('manipulation_station.scenario.yaml', arg_provides_ext=True))
-    station = builder.AddSystem(MakeHardwareStation(scenario, meshcat, parser_prefinalize_callback=Setup))
+    station = builder.AddSystem(MakeHardwareStation(scenario, meshcat, parser_prefinalize_callback=Setup, noise_level=args.noise_level))
 
     plant = station.GetSubsystemByName("plant")
     scene_graph = station.GetSubsystemByName("scene_graph")
@@ -854,6 +870,61 @@ def simulate(args: SimArgs):
     if not args.use_traj_vis:
         simulator = Simulator(diagram)
         global_context = simulator.get_mutable_context()
+
+        plant_context = plant.GetMyContextFromRoot(global_context) 
+        _iiwa = plant.GetModelInstanceByName('iiwa')
+
+        _G = plant.GetBodyByName('body')
+        _2nd_table = plant.GetModelInstanceByName('valve_table')
+        _N = plant.GetRigidBodyByName('link', _2nd_table)
+        X_WGorig = plant.EvalBodyPoseInWorld(plant_context, _G)
+        X_WNorig = plant.EvalBodyPoseInWorld(plant_context, _N)
+        X_WG = copy.deepcopy(X_WGorig)
+        random_offset_g = np.random.uniform(low=-args.noise_level, high=args.noise_level, size=(3))
+        X_WG.set_translation(X_WGorig.translation() + random_offset_g)
+        q = plant.GetPositions(plant_context, _iiwa)
+
+        q_nominal_full = np.zeros(plant.num_positions(),)
+        q_nominal_full[:7] = q
+
+        ik = InverseKinematics(plant)
+        q_variables = ik.q()
+        prog = ik.prog()
+        prog.AddCost(np.square(np.dot(q_variables, q_nominal_full)))
+
+        prog.SetInitialGuess(q_variables, q_nominal_full)
+
+        offset = np.array([0.01, 0.01, 0.01])
+        offset_upper = X_WG.translation() + offset
+        offset_lower = X_WG.translation() - offset
+        pos = np.zeros((3,))
+
+        ik.AddPositionConstraint(
+            frameA=plant.world_frame(),
+            frameB=plant.GetFrameByName("body"),
+            p_BQ=pos,
+            p_AQ_lower=offset_lower,
+            p_AQ_upper=offset_upper
+            )
+        ik.AddOrientationConstraint(
+            frameAbar=plant.GetFrameByName("body"),
+            R_AbarA=RotationMatrix.Identity(),
+            frameBbar=plant.world_frame(),
+            R_BbarB=X_WG.rotation(),
+            theta_bound=np.radians(0.1)
+            )
+
+        result = Solve(prog)
+        assert result.is_success()
+        q0_new = result.GetSolution(q_variables)
+        plant.SetPositions(plant_context, q0_new)
+
+        print('q   initial = ', q.T, '\n')
+        print('X_G initial = ', X_WGorig, '\n')
+        print('X_G  result = ', X_WG, '\n')
+        print('X_N  result = ', X_WNorig, '\n')
+        print('q    result = ', q0_new[:7].T, '\n')
+
     else:
         global_context = diagram.CreateDefaultContext()
         rich_trajectory_vis(visualizer)

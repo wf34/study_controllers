@@ -299,6 +299,7 @@ class MultiTurnPlanner(LeafSystem):
 
         iiwa_state = self.GetInputPort("iiwa_state_measured").Eval(context)
         iiwa_positions = iiwa_state[:7]
+        print('now=', context.get_time(), 'q=', iiwa_positions.T, '\n')
 
         q_keyframes = optimize_target_trajectory(keyframes, orientation_flags, duplicate_flags,
                                                  self.plant, iiwa_positions,
