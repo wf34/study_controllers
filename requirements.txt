@@ -1,6 +1,0 @@
-typed-argument-parser
-drake==1.33.0
-pydot
-ruff
-pydantic
-numpy

@@ -1,0 +1,22 @@
+[project]
+name = "study_controllers"
+version = "0.0.0"
+description = "Drake-based experiments with manipulator controllers"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+  "typed-argument-parser",
+  "drake==1.33.0",
+  "pydot",
+  "pydantic",
+  "numpy",
+  "matplotlib",
+]
+
+[dependency-groups]
+dev = [
+  "ruff",
+]
+
+[tool.uv]
+package = false
